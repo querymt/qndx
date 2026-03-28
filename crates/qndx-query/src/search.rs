@@ -11,7 +11,7 @@ use std::path::Path;
 use qndx_core::scan::{SearchMatch, SearchResults};
 use qndx_index::IndexReader;
 
-use crate::decompose::decompose_pattern;
+use crate::planner::{plan_query, QueryPlan};
 
 /// Statistics from an index-backed search.
 #[derive(Debug, Clone)]
@@ -22,8 +22,10 @@ pub struct IndexSearchStats {
     pub candidate_count: usize,
     /// Number of files that actually matched after verification.
     pub verified_count: usize,
-    /// Number of trigram lookups performed.
+    /// Number of n-gram lookups performed.
     pub lookup_count: usize,
+    /// Which strategy the planner selected.
+    pub strategy: crate::planner::PlanStrategy,
 }
 
 /// Result of an index-backed search including stats.
@@ -63,17 +65,11 @@ pub fn index_search_with_reader(
 ) -> Result<IndexSearchResults, String> {
     let re = regex::Regex::new(pattern).map_err(|e| format!("invalid regex: {}", e))?;
 
-    // Step 1: Decompose and plan
-    let decomposition = decompose_pattern(pattern);
-    let lookup_count = decomposition.required.len()
-        + decomposition
-            .alternatives
-            .iter()
-            .map(|a| a.len())
-            .sum::<usize>();
+    // Step 1: Plan the query (chooses trigram vs sparse strategy)
+    let plan = plan_query(pattern);
 
-    // Step 2: Get candidate set from index
-    let candidates = resolve_candidates(reader, &decomposition);
+    // Step 2: Get candidate set from index using the plan's chosen hashes
+    let candidates = resolve_candidates_from_plan(reader, &plan);
 
     let candidate_ids = candidates.to_vec();
     let candidate_count = candidate_ids.len();
@@ -120,7 +116,8 @@ pub fn index_search_with_reader(
             total_files: reader.file_count(),
             candidate_count,
             verified_count,
-            lookup_count,
+            lookup_count: plan.lookup_count,
+            strategy: plan.strategy,
         },
     })
 }
@@ -134,8 +131,8 @@ pub fn index_search_matching_files(
 ) -> Result<Vec<String>, String> {
     let re = regex::Regex::new(pattern).map_err(|e| format!("invalid regex: {}", e))?;
 
-    let decomposition = decompose_pattern(pattern);
-    let candidates = resolve_candidates(reader, &decomposition);
+    let plan = plan_query(pattern);
+    let candidates = resolve_candidates_from_plan(reader, &plan);
 
     let candidate_ids = candidates.to_vec();
     let mut matching = Vec::new();
@@ -163,44 +160,46 @@ pub fn index_search_matching_files(
 }
 
 /// Plan a query and return the plan (for diagnostics / benchmarking).
-pub fn plan(pattern: &str) -> crate::planner::QueryPlan {
-    crate::planner::plan_query(pattern)
+pub fn plan(pattern: &str) -> QueryPlan {
+    plan_query(pattern)
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-use crate::decompose::Decomposition;
 use qndx_index::postings::PostingList;
 
-/// Resolve candidate file set from a decomposition.
+/// Resolve candidate file set from a query plan.
 ///
-/// - If no trigrams at all: all files are candidates (fallback to full scan).
-/// - If only required trigrams (no alternation): intersect them (AND).
+/// Uses the plan's `required_hashes` and `alternative_hashes` (which may come
+/// from either the trigram or sparse strategy, depending on what the planner chose).
+///
+/// - If no hashes at all: all files are candidates (fallback to full scan).
+/// - If only required hashes (no alternation): intersect them (AND).
 /// - If only alternatives (top-level alternation): union each branch's intersection.
 /// - If both required and alternatives: intersect required, then intersect with
 ///   the union of alternatives.
-fn resolve_candidates(reader: &IndexReader, decomposition: &Decomposition) -> PostingList {
-    let has_required = !decomposition.required.is_empty();
-    let has_alternatives = !decomposition.alternatives.is_empty();
+fn resolve_candidates_from_plan(reader: &IndexReader, plan: &QueryPlan) -> PostingList {
+    let has_required = !plan.required_hashes.is_empty();
+    let has_alternatives = !plan.alternative_hashes.is_empty();
 
     if !has_required && !has_alternatives {
-        // No trigrams extracted: all files are candidates
+        // No n-grams extracted: all files are candidates
         let all: Vec<qndx_core::FileId> = (0..reader.file_count()).collect();
         return PostingList::from_vec(all);
     }
 
     if has_required && !has_alternatives {
-        // Simple case: intersect all required trigrams
-        return reader.lookup_intersect(&decomposition.required);
+        // Simple case: intersect all required n-grams
+        return reader.lookup_intersect(&plan.required_hashes);
     }
 
     // Build union of all alternative branches
     let mut alt_union = PostingList::from_vec(vec![]);
-    for alt_hashes in &decomposition.alternatives {
+    for alt_hashes in &plan.alternative_hashes {
         if alt_hashes.is_empty() {
-            // Branch with no extractable trigrams: all files are candidates for this branch
+            // Branch with no extractable n-grams: all files are candidates for this branch
             let all: Vec<qndx_core::FileId> = (0..reader.file_count()).collect();
             alt_union = PostingList::from_vec(all);
             break; // Union with "all" is "all"
@@ -210,11 +209,11 @@ fn resolve_candidates(reader: &IndexReader, decomposition: &Decomposition) -> Po
     }
 
     if has_required {
-        // Intersect required trigrams with the union of alternatives
-        let required_result = reader.lookup_intersect(&decomposition.required);
+        // Intersect required n-grams with the union of alternatives
+        let required_result = reader.lookup_intersect(&plan.required_hashes);
         required_result.intersect(&alt_union)
     } else {
-        // Only alternatives (top-level alternation, no shared required trigrams)
+        // Only alternatives (top-level alternation, no shared required n-grams)
         alt_union
     }
 }
@@ -334,8 +333,7 @@ mod tests {
     fn index_search_matching_files_basic() {
         let (dir, index_dir) = setup_corpus_and_index();
         let reader = IndexReader::open(&index_dir).unwrap();
-        let matching =
-            index_search_matching_files(&reader, dir.path(), "MAX_FILE_SIZE").unwrap();
+        let matching = index_search_matching_files(&reader, dir.path(), "MAX_FILE_SIZE").unwrap();
 
         assert!(matching.contains(&"main.rs".to_string()));
         assert!(matching.contains(&"lib.rs".to_string()));
@@ -371,8 +369,7 @@ mod tests {
                 qndx_core::scan::scan_matching_files(dir.path(), pattern, &config).unwrap();
 
             let reader = IndexReader::open(&index_dir).unwrap();
-            let index_files =
-                index_search_matching_files(&reader, dir.path(), pattern).unwrap();
+            let index_files = index_search_matching_files(&reader, dir.path(), pattern).unwrap();
 
             // Index must be a superset of scan (no false negatives)
             for f in &scan_files {

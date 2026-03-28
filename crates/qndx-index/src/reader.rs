@@ -8,8 +8,8 @@ use std::io::BufReader;
 use std::path::Path;
 
 use qndx_core::format::{
-    self, decode_postings, deserialize_ngram_entry, FormatError, MAGIC_MANIFEST, MAGIC_NGRAMS,
-    MAGIC_POSTINGS, NGRAM_ENTRY_SIZE,
+    self, decode_postings, deserialize_ngram_entry, FormatError, FLAG_SPARSE, MAGIC_MANIFEST,
+    MAGIC_NGRAMS, MAGIC_POSTINGS, NGRAM_ENTRY_SIZE,
 };
 use qndx_core::{FileId, Manifest, NgramEntry, NgramHash};
 
@@ -41,8 +41,9 @@ impl IndexReader {
         let mut ngram_table = Vec::with_capacity(entry_count);
         for i in 0..entry_count {
             let start = i * NGRAM_ENTRY_SIZE;
-            let buf: &[u8; NGRAM_ENTRY_SIZE] =
-                ngrams_payload[start..start + NGRAM_ENTRY_SIZE].try_into().unwrap();
+            let buf: &[u8; NGRAM_ENTRY_SIZE] = ngrams_payload[start..start + NGRAM_ENTRY_SIZE]
+                .try_into()
+                .unwrap();
             ngram_table.push(deserialize_ngram_entry(buf));
         }
 
@@ -141,9 +142,49 @@ impl IndexReader {
         self.manifest.files.get(id as usize).map(|s| s.as_str())
     }
 
-    /// Get the number of unique trigrams in the index.
+    /// Get the number of unique n-grams in the index (trigrams + sparse).
     pub fn ngram_count(&self) -> usize {
         self.ngram_table.len()
+    }
+
+    /// Get the number of sparse n-gram entries in the index.
+    pub fn sparse_count(&self) -> usize {
+        self.ngram_table
+            .iter()
+            .filter(|e| e.flags & FLAG_SPARSE != 0)
+            .count()
+    }
+
+    /// Get the number of trigram-only entries in the index.
+    pub fn trigram_only_count(&self) -> usize {
+        self.ngram_table
+            .iter()
+            .filter(|e| e.flags & FLAG_SPARSE == 0)
+            .count()
+    }
+
+    /// Check if a given n-gram hash exists in the index.
+    pub fn contains(&self, hash: NgramHash) -> bool {
+        self.ngram_table
+            .binary_search_by_key(&hash, |entry| entry.hash)
+            .is_ok()
+    }
+
+    /// Check if a given n-gram hash is a sparse n-gram.
+    pub fn is_sparse(&self, hash: NgramHash) -> bool {
+        match self
+            .ngram_table
+            .binary_search_by_key(&hash, |entry| entry.hash)
+        {
+            Ok(idx) => self.ngram_table[idx].flags & FLAG_SPARSE != 0,
+            Err(_) => false,
+        }
+    }
+
+    /// Get the posting list length (document frequency) for a given n-gram hash.
+    /// Returns 0 if the hash is not found.
+    pub fn posting_len(&self, hash: NgramHash) -> usize {
+        self.lookup(hash).len()
     }
 
     /// Get the number of indexed files.

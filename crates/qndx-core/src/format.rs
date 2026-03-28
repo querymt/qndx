@@ -30,6 +30,9 @@ pub const MAGIC_MANIFEST: [u8; 4] = *b"QXMF";
 /// Size of a single ngram table entry on disk (hash:4 + offset:8 + len:4 + flags:4 = 20 bytes).
 pub const NGRAM_ENTRY_SIZE: usize = 20;
 
+/// Flag: this n-gram entry is a sparse n-gram (length > 3).
+pub const FLAG_SPARSE: u32 = 1 << 0;
+
 /// A versioned file header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileHeader {

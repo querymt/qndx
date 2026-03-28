@@ -265,8 +265,7 @@ fn differential_match_positions_small() {
         let scan_results = scan_search(dir.path(), pattern, &config).unwrap();
 
         // Compare against index-backed match extraction
-        let index_results =
-            qndx_query::index_search(dir.path(), &index_dir, pattern).unwrap();
+        let index_results = qndx_query::index_search(dir.path(), &index_dir, pattern).unwrap();
 
         // Every scan match must appear in index results (no false negatives)
         for scan_match in &scan_results.matches {
