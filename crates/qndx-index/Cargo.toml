@@ -7,6 +7,7 @@ description = "Index builder, storage writer/reader for qndx"
 
 [dependencies]
 qndx-core = { workspace = true }
+qndx-git = { workspace = true }
 roaring = { workspace = true }
 postcard = { workspace = true }
 serde = { workspace = true }

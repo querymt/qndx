@@ -9,7 +9,7 @@
 use std::path::Path;
 
 use qndx_core::scan::{SearchMatch, SearchResults};
-use qndx_index::IndexReader;
+use qndx_index::{IndexReader, OverlayIndex};
 
 use crate::planner::{plan_query, QueryPlan};
 
@@ -26,6 +26,10 @@ pub struct IndexSearchStats {
     pub lookup_count: usize,
     /// Which strategy the planner selected.
     pub strategy: crate::planner::PlanStrategy,
+    /// Number of overlay files (dirty files).
+    pub overlay_files: usize,
+    /// Number of deleted files excluded from baseline.
+    pub deleted_files: usize,
 }
 
 /// Result of an index-backed search including stats.
@@ -118,6 +122,8 @@ pub fn index_search_with_reader(
             verified_count,
             lookup_count: plan.lookup_count,
             strategy: plan.strategy,
+            overlay_files: 0,
+            deleted_files: 0,
         },
     })
 }
@@ -257,6 +263,143 @@ fn offset_to_line_col(line_starts: &[usize], offset: usize) -> (usize, usize) {
     (line_idx + 1, column)
 }
 
+/// Run an index-backed search with an overlay for dirty files.
+///
+/// This implements the merged query path:
+/// 1. Query both baseline index and overlay for candidates
+/// 2. Exclude deleted files from baseline results
+/// 3. Verify all candidates (baseline + overlay) against the regex
+/// 4. Return combined results with read-your-writes semantics
+pub fn index_search_with_overlay(
+    reader: &IndexReader,
+    overlay: &OverlayIndex,
+    root: &Path,
+    pattern: &str,
+) -> Result<IndexSearchResults, String> {
+    let re = regex::Regex::new(pattern).map_err(|e| format!("invalid regex: {}", e))?;
+
+    // Step 1: Plan the query (chooses trigram vs sparse strategy)
+    let plan = plan_query(pattern);
+
+    // Step 2: Get candidate sets from both baseline and overlay
+    let baseline_candidates = resolve_candidates_from_plan(reader, &plan);
+    let overlay_candidates = resolve_candidates_from_plan_overlay(overlay, &plan);
+
+    // Step 3: Merge candidates and filter out deleted files
+    let mut all_candidate_ids = Vec::new();
+    
+    // Add baseline candidates, excluding deleted files
+    for &file_id in baseline_candidates.to_vec().iter() {
+        if let Some(rel_path) = reader.file_path(file_id) {
+            if !overlay.is_deleted(Path::new(rel_path)) {
+                all_candidate_ids.push((file_id, false)); // false = baseline
+            }
+        }
+    }
+    
+    // Add overlay candidates
+    for &file_id in overlay_candidates.to_vec().iter() {
+        all_candidate_ids.push((file_id, true)); // true = overlay
+    }
+
+    let candidate_count = all_candidate_ids.len();
+
+    // Step 4: Verify candidates by reading actual file content
+    let mut all_matches = Vec::new();
+    let mut files_scanned = 0usize;
+    let mut bytes_scanned = 0u64;
+    let mut verified_count = 0usize;
+
+    for (file_id, is_overlay) in all_candidate_ids {
+        let rel_path_str = if is_overlay {
+            match overlay.file_path(file_id) {
+                Some(p) => p.to_str().unwrap_or("").to_string(),
+                None => continue,
+            }
+        } else {
+            match reader.file_path(file_id) {
+                Some(p) => p.to_string(),
+                None => continue,
+            }
+        };
+
+        let abs_path = root.join(&rel_path_str);
+        let content = match std::fs::read(&abs_path) {
+            Ok(c) => c,
+            Err(_) => continue, // File might have been deleted between detection and verification
+        };
+
+        files_scanned += 1;
+        bytes_scanned += content.len() as u64;
+
+        let text = String::from_utf8_lossy(&content);
+        if re.is_match(&text) {
+            verified_count += 1;
+            // Extract match positions
+            let file_matches = extract_matches(&re, &rel_path_str, &text);
+            all_matches.extend(file_matches);
+        }
+    }
+
+    all_matches.sort();
+
+    Ok(IndexSearchResults {
+        results: SearchResults {
+            matches: all_matches,
+            files_scanned,
+            bytes_scanned,
+        },
+        stats: IndexSearchStats {
+            total_files: reader.file_count(),
+            candidate_count,
+            verified_count,
+            lookup_count: plan.lookup_count,
+            strategy: plan.strategy,
+            overlay_files: overlay.file_count(),
+            deleted_files: overlay.deleted_count(),
+        },
+    })
+}
+
+/// Resolve candidate file set from a query plan using the overlay index.
+fn resolve_candidates_from_plan_overlay(overlay: &OverlayIndex, plan: &QueryPlan) -> qndx_index::postings::PostingList {
+    use qndx_index::postings::PostingList;
+
+    let has_required = !plan.required_hashes.is_empty();
+    let has_alternatives = !plan.alternative_hashes.is_empty();
+
+    if !has_required && !has_alternatives {
+        // No n-grams extracted: all overlay files are candidates
+        return overlay.lookup_intersect(&[]);
+    }
+
+    if has_required && !has_alternatives {
+        // Simple case: intersect all required n-grams
+        return overlay.lookup_intersect(&plan.required_hashes);
+    }
+
+    // Build union of all alternative branches
+    let mut alt_union = PostingList::from_vec(vec![]);
+    for alt_hashes in &plan.alternative_hashes {
+        if alt_hashes.is_empty() {
+            // Branch with no extractable n-grams: all overlay files are candidates for this branch
+            alt_union = overlay.lookup_intersect(&[]);
+            break; // Union with "all" is "all"
+        }
+        let branch_result = overlay.lookup_intersect(alt_hashes);
+        alt_union = alt_union.union(&branch_result);
+    }
+
+    if has_required {
+        // Intersect required n-grams with the union of alternatives
+        let required_result = overlay.lookup_intersect(&plan.required_hashes);
+        required_result.intersect(&alt_union)
+    } else {
+        // Only alternatives (top-level alternation, no shared required n-grams)
+        alt_union
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,5 +524,115 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn overlay_search_modified_file() {
+        let (dir, index_dir) = setup_corpus_and_index();
+        let reader = IndexReader::open(&index_dir).unwrap();
+
+        // Modify a file with new content
+        fs::write(dir.path().join("main.rs"), "fn main() {\n    let x = MODIFIED_CONSTANT;\n}\n").unwrap();
+
+        // Build overlay from the modified file
+        use std::path::PathBuf;
+        use qndx_git::FileStatus;
+        let dirty_files = vec![(PathBuf::from("main.rs"), FileStatus::Modified)];
+        let overlay = OverlayIndex::from_dirty_files(dir.path(), &dirty_files, 1_000_000_000).unwrap();
+
+        // Search for the new pattern
+        let result = index_search_with_overlay(&reader, &overlay, dir.path(), "MODIFIED_CONSTANT").unwrap();
+
+        assert_eq!(result.stats.overlay_files, 1);
+        assert!(!result.results.matches.is_empty());
+        let paths: Vec<&str> = result.results.matches.iter().map(|m| m.path.as_str()).collect();
+        assert!(paths.contains(&"main.rs"));
+    }
+
+    #[test]
+    fn overlay_search_added_file() {
+        let (dir, index_dir) = setup_corpus_and_index();
+        let reader = IndexReader::open(&index_dir).unwrap();
+
+        // Add a new file
+        fs::write(dir.path().join("new.rs"), "pub const NEW_PATTERN: usize = 42;\n").unwrap();
+
+        // Build overlay from the added file
+        use std::path::PathBuf;
+        use qndx_git::FileStatus;
+        let dirty_files = vec![(PathBuf::from("new.rs"), FileStatus::Added)];
+        let overlay = OverlayIndex::from_dirty_files(dir.path(), &dirty_files, 1_000_000_000).unwrap();
+
+        // Search for the pattern in the new file
+        let result = index_search_with_overlay(&reader, &overlay, dir.path(), "NEW_PATTERN").unwrap();
+
+        assert_eq!(result.stats.overlay_files, 1);
+        assert!(!result.results.matches.is_empty());
+        let paths: Vec<&str> = result.results.matches.iter().map(|m| m.path.as_str()).collect();
+        assert!(paths.contains(&"new.rs"));
+    }
+
+    #[test]
+    fn overlay_search_deleted_file() {
+        let (dir, index_dir) = setup_corpus_and_index();
+        let reader = IndexReader::open(&index_dir).unwrap();
+
+        // Mark a file as deleted
+        use std::path::PathBuf;
+        use qndx_git::FileStatus;
+        let dirty_files = vec![(PathBuf::from("lib.rs"), FileStatus::Deleted)];
+        let overlay = OverlayIndex::from_dirty_files(dir.path(), &dirty_files, 1_000_000_000).unwrap();
+
+        // Search for pattern that exists in the deleted file
+        let result = index_search_with_overlay(&reader, &overlay, dir.path(), "MAX_FILE_SIZE").unwrap();
+
+        assert_eq!(result.stats.deleted_files, 1);
+        
+        // lib.rs should not appear in results (it's deleted)
+        let paths: Vec<&str> = result.results.matches.iter().map(|m| m.path.as_str()).collect();
+        assert!(!paths.contains(&"lib.rs"));
+        
+        // But main.rs should still be found
+        assert!(paths.contains(&"main.rs"));
+    }
+
+    #[test]
+    fn overlay_search_empty_overlay() {
+        let (dir, index_dir) = setup_corpus_and_index();
+        let reader = IndexReader::open(&index_dir).unwrap();
+        let overlay = OverlayIndex::new(1_000_000_000);
+
+        // Search with empty overlay should behave like baseline search
+        let result = index_search_with_overlay(&reader, &overlay, dir.path(), "MAX_FILE_SIZE").unwrap();
+
+        assert_eq!(result.stats.overlay_files, 0);
+        assert_eq!(result.stats.deleted_files, 0);
+        assert!(!result.results.matches.is_empty());
+    }
+
+    #[test]
+    fn overlay_read_your_writes() {
+        let (dir, index_dir) = setup_corpus_and_index();
+        let reader = IndexReader::open(&index_dir).unwrap();
+
+        // Modify main.rs to remove the old pattern and add a new one
+        fs::write(dir.path().join("main.rs"), "fn main() {\n    let x = FRESH_DATA;\n}\n").unwrap();
+
+        use std::path::PathBuf;
+        use qndx_git::FileStatus;
+        let dirty_files = vec![(PathBuf::from("main.rs"), FileStatus::Modified)];
+        let overlay = OverlayIndex::from_dirty_files(dir.path(), &dirty_files, 1_000_000_000).unwrap();
+
+        // Search for the new pattern should find it
+        let result_new = index_search_with_overlay(&reader, &overlay, dir.path(), "FRESH_DATA").unwrap();
+        assert!(!result_new.results.matches.is_empty());
+        
+        // Search for the old pattern should NOT find it in main.rs anymore
+        let result_old = index_search_with_overlay(&reader, &overlay, dir.path(), "MAX_FILE_SIZE").unwrap();
+        let paths: Vec<&str> = result_old.results.matches.iter().map(|m| m.path.as_str()).collect();
+        
+        // main.rs should not match (it was modified), but lib.rs still should
+        assert!(!paths.contains(&"main.rs"));
+        assert!(paths.contains(&"lib.rs"));
     }
 }
