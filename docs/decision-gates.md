@@ -8,7 +8,7 @@ evaluating the decision using the benchmark harness.
 
 ## Gate A: Manifest Serializer
 
-**Candidates:** postcard vs wincode (vs optional tiny custom manifest)
+**Candidates:** postcard vs wincode (vs serde_json baseline)
 
 ### Criteria
 
@@ -30,8 +30,16 @@ evaluating the decision using the benchmark harness.
 cargo bench -- serializer_choice
 ```
 
-Compare `manifest_encode` and `manifest_decode` groups across postcard and wincode.
-Record median throughput and encoded sizes from Criterion output.
+Compare `postcard/encode`, `postcard/decode`, `wincode/encode`, `wincode/decode`,
+and `serde_json/encode`, `serde_json/decode` groups at tiny/small/medium/large
+manifest sizes. The benchmark also prints encoded sizes for the `large` case.
+
+### Implementation
+
+- `Manifest` derives both `serde::{Serialize, Deserialize}` and
+  `wincode::{SchemaWrite, SchemaRead}` in `qndx-core/src/types.rs`.
+- Serializer choice benchmark: `crates/qndx-bench/benches/serializer_choice.rs`
+  compares postcard, wincode, and serde_json at 4 manifest sizes (10, 100, 1K, 10K files).
 
 ### Current Decision
 
@@ -42,7 +50,7 @@ clear wincode advantage at realistic manifest sizes (1K--10K files).
 
 ## Gate B: Postings Representation
 
-**Candidates:** Vec<u32> (delta-encoded), Roaring bitmap, hybrid (threshold-based)
+**Candidates:** Vec<u32> (delta-encoded, fixed-width or varint), Roaring bitmap, hybrid (threshold-based)
 
 ### Criteria
 
@@ -64,14 +72,39 @@ clear wincode advantage at realistic manifest sizes (1K--10K files).
 cargo bench -- postings_choice
 ```
 
-Compare `intersect` and `union` groups across `vec_delta`, `roaring`, and `hybrid`
-at low/medium/high cardinality. Measure memory footprint using the reported index
-size from `build_index`.
+Two benchmark groups:
+- `postings_intersect_union`: Compares vec/roaring/hybrid intersection and union
+  ops at low (20), medium (500), and high (5000) cardinality.
+- `postings_encode_decode`: Compares vec_fixed, vec_varint, roaring, and hybrid_auto
+  encode/decode throughput. Prints encoded sizes for high cardinality.
+
+### Implementation
+
+Three postings representations in `qndx-index/src/postings.rs`:
+
+- **Vec**: sorted `Vec<u32>` — simple, good for small posting lists.
+- **Roaring**: compressed bitmap via `roaring-rs` — efficient for large, dense lists.
+- **Hybrid**: auto-selects Vec or Roaring based on configurable threshold (default: 64).
+
+On-disk format uses a 1-byte tag prefix for auto-detection:
+- `0x01`: fixed-width delta-encoded u32s
+- `0x02`: varint delta-encoded (LEB128-style)
+- `0x03`: Roaring bitmap native serialization
+
+Encoding options:
+- `encode_fixed()`: fixed-width delta (tag 0x01)
+- `encode_varint()`: varint delta, more compact for small deltas (tag 0x02)
+- `encode_roaring()`: native Roaring serialization (tag 0x03)
+- `encode_auto()`: varint for Vec lists, Roaring for Roaring lists
+- `decode_tagged()`: auto-detects format from tag byte
+
+The index builder (`builder.rs`) uses `encode_auto()` and the reader (`reader.rs`)
+uses `decode_tagged()` for transparent hybrid support.
 
 ### Current Decision
 
-**Hybrid** with threshold at 64 entries (implemented in `qndx-index/src/postings.rs`).
-Re-evaluate if index size grows beyond budget.
+**Hybrid** with threshold at 64 entries, varint delta for small lists, Roaring for
+large lists. Re-evaluate if index size grows beyond budget.
 
 ---
 

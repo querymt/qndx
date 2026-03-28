@@ -7,6 +7,7 @@ description = "Shared types, file format definitions, hashing, and IDs for qndx"
 
 [dependencies]
 serde = { workspace = true }
+wincode = { workspace = true }
 crc32fast = { workspace = true }
 ignore = { workspace = true }
 regex = { workspace = true }

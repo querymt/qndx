@@ -15,12 +15,13 @@ use std::io::BufWriter;
 use std::path::Path;
 
 use qndx_core::format::{
-    self, encode_postings, serialize_ngram_entry, FLAG_SPARSE, MAGIC_MANIFEST, MAGIC_NGRAMS,
-    MAGIC_POSTINGS, NGRAM_ENTRY_SIZE,
+    self, serialize_ngram_entry, FLAG_SPARSE, MAGIC_MANIFEST, MAGIC_NGRAMS, MAGIC_POSTINGS,
+    NGRAM_ENTRY_SIZE,
 };
 use qndx_core::{FileId, Manifest, NgramEntry, NgramHash};
 
 use crate::ngram::{extract_sparse_ngrams, extract_trigrams};
+use crate::postings::{PostingList, DEFAULT_HYBRID_THRESHOLD};
 
 /// Result of building an index.
 #[derive(Debug)]
@@ -80,14 +81,17 @@ pub fn build_index(
         posting.dedup();
     }
 
-    // Step 2: Serialize postings into a contiguous buffer
+    // Step 2: Serialize postings into a contiguous buffer using tagged hybrid format.
+    // Each posting block is prefixed with a 1-byte tag so the reader can auto-detect
+    // whether it was stored as varint-delta (small lists) or Roaring (large lists).
     let mut postings_payload = Vec::new();
     let mut ngram_entries: Vec<NgramEntry> = Vec::with_capacity(inverted.len());
     let mut trigram_count: u32 = 0;
     let mut sparse_count: u32 = 0;
 
     for (&hash, ids) in &inverted {
-        let encoded = encode_postings(ids);
+        let posting = PostingList::from_vec_with_threshold(ids.clone(), DEFAULT_HYBRID_THRESHOLD);
+        let encoded = posting.encode_auto();
         let offset = postings_payload.len() as u64;
         let len = encoded.len() as u32;
         postings_payload.extend_from_slice(&encoded);

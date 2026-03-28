@@ -8,8 +8,8 @@ use std::io::BufReader;
 use std::path::Path;
 
 use qndx_core::format::{
-    self, decode_postings, deserialize_ngram_entry, FormatError, FLAG_SPARSE, MAGIC_MANIFEST,
-    MAGIC_NGRAMS, MAGIC_POSTINGS, NGRAM_ENTRY_SIZE,
+    self, deserialize_ngram_entry, FormatError, FLAG_SPARSE, MAGIC_MANIFEST, MAGIC_NGRAMS,
+    MAGIC_POSTINGS, NGRAM_ENTRY_SIZE,
 };
 use qndx_core::{FileId, Manifest, NgramEntry, NgramHash};
 
@@ -73,6 +73,10 @@ impl IndexReader {
 
     /// Look up a single trigram hash via binary search.
     /// Returns the posting list for that trigram, or an empty list if not found.
+    ///
+    /// The on-disk postings block is prefixed with a 1-byte tag that identifies
+    /// the encoding format (varint-delta, fixed-delta, or Roaring). The reader
+    /// auto-detects the format using `PostingList::decode_tagged`.
     pub fn lookup(&self, hash: NgramHash) -> PostingList {
         match self
             .ngram_table
@@ -83,13 +87,13 @@ impl IndexReader {
                 let start = entry.offset as usize;
                 let end = start + entry.len as usize;
                 if end <= self.postings_data.len() {
-                    let ids = decode_postings(&self.postings_data[start..end]);
-                    PostingList::from_vec(ids)
+                    PostingList::decode_tagged(&self.postings_data[start..end])
+                        .unwrap_or_else(|| PostingList::Vec(vec![]))
                 } else {
-                    PostingList::from_vec(vec![])
+                    PostingList::Vec(vec![])
                 }
             }
-            Err(_) => PostingList::from_vec(vec![]),
+            Err(_) => PostingList::Vec(vec![]),
         }
     }
 

@@ -18,6 +18,7 @@ qndx-index = { workspace = true }
 qndx-query = { workspace = true }
 qndx-git = { workspace = true }
 postcard = { workspace = true }
+wincode = { workspace = true }
 roaring = { workspace = true }
 
 [[bench]]

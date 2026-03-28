@@ -27,6 +27,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 
 # Serialization candidates (for decision gate A)
 postcard = { version = "1", features = ["alloc"] }
+wincode = { version = "0.5", features = ["derive", "alloc"] }
 serde = { version = "1", features = ["derive"] }
 
 # Bit-set / compressed postings (for decision gate B)
