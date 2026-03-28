@@ -10,3 +10,7 @@ qndx-core = { workspace = true }
 qndx-index = { workspace = true }
 regex = { workspace = true }
 regex-syntax = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+proptest = { workspace = true }

@@ -3,13 +3,13 @@
 //! This harness verifies that index-backed search results are a superset of
 //! (or equal to) scan-only search results for any given query and corpus.
 //!
-//! Until index-backed search is implemented (M2), the "index" side uses
-//! the scan-only path as well, proving the harness infrastructure works.
-//! When M2 lands, replace `index_search_matching_files` with the real
-//! index-backed implementation.
+//! Now uses the real M2 index-backed search pipeline:
+//! build index -> decompose pattern -> lookup postings -> verify candidates.
 
 use qndx_core::scan::{scan_matching_files, scan_search};
 use qndx_core::walk::WalkConfig;
+use qndx_index::{build_index, IndexReader};
+use qndx_query::index_search_matching_files;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
@@ -29,7 +29,23 @@ struct DiffResult {
     /// Files in scan but missing from index (false negatives -- must be empty).
     false_negatives: BTreeSet<String>,
     /// Files in index but not in scan (false positives -- acceptable).
+    #[allow(dead_code)]
     false_positives: BTreeSet<String>,
+}
+
+/// Build an index from the corpus and run index-backed file matching.
+/// Uses a separate temp directory for the index to avoid contaminating the corpus.
+fn build_and_search_index(root: &Path, pattern: &str, config: &WalkConfig) -> BTreeSet<String> {
+    let index_tmp = tempfile::tempdir().unwrap();
+    let index_dir = index_tmp.path().join("v1");
+    let files = qndx_core::walk::discover_and_read_files(root, config);
+    build_index(&files, &index_dir, None).unwrap();
+
+    let reader = IndexReader::open(&index_dir).unwrap();
+    index_search_matching_files(&reader, root, pattern)
+        .unwrap()
+        .into_iter()
+        .collect()
 }
 
 /// Run both search paths and compare.
@@ -39,9 +55,7 @@ fn differential_compare(root: &Path, pattern: &str, config: &WalkConfig) -> Diff
         .into_iter()
         .collect();
 
-    // TODO(M2): Replace with real index-backed search.
-    // For now, use scan-only to prove the harness works.
-    let index_files: BTreeSet<String> = index_search_matching_files(root, pattern, config);
+    let index_files: BTreeSet<String> = build_and_search_index(root, pattern, config);
 
     let false_negatives: BTreeSet<String> = scan_files.difference(&index_files).cloned().collect();
     let false_positives: BTreeSet<String> = index_files.difference(&scan_files).cloned().collect();
@@ -65,29 +79,6 @@ fn assert_no_false_negatives(result: &DiffResult) {
         result.scan_files,
         result.index_files,
     );
-}
-
-// ---------------------------------------------------------------------------
-// Stub index-backed search (replaced in M2)
-// ---------------------------------------------------------------------------
-
-/// Placeholder: returns scan-only results until index-backed search exists.
-///
-/// When the real index is implemented, this function should:
-/// 1. Build an index from the corpus
-/// 2. Decompose the pattern into n-gram lookups
-/// 3. Generate candidate set from postings
-/// 4. Verify candidates with regex
-/// 5. Return matching file paths
-fn index_search_matching_files(root: &Path, pattern: &str, config: &WalkConfig) -> BTreeSet<String> {
-    // TODO(M2): Replace with:
-    //   let index = build_index(root, config);
-    //   let candidates = query_index(&index, pattern);
-    //   verify_and_return(candidates, pattern)
-    scan_matching_files(root, pattern, config)
-        .unwrap()
-        .into_iter()
-        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -191,15 +182,9 @@ fn differential_small_corpus() {
     build_small_corpus(dir.path());
     let config = WalkConfig::default();
 
-    for (name, pattern) in representative_queries() {
+    for (_name, pattern) in representative_queries() {
         let result = differential_compare(dir.path(), pattern, &config);
         assert_no_false_negatives(&result);
-        // Sanity: scan and index should agree exactly (since index = scan for now)
-        assert_eq!(
-            result.scan_files, result.index_files,
-            "mismatch for query '{}' ({})",
-            pattern, name,
-        );
     }
 }
 
@@ -209,14 +194,9 @@ fn differential_medium_corpus() {
     build_medium_corpus(dir.path());
     let config = WalkConfig::default();
 
-    for (name, pattern) in representative_queries() {
+    for (_name, pattern) in representative_queries() {
         let result = differential_compare(dir.path(), pattern, &config);
         assert_no_false_negatives(&result);
-        assert_eq!(
-            result.scan_files, result.index_files,
-            "mismatch for query '{}' ({})",
-            pattern, name,
-        );
     }
 }
 
@@ -226,14 +206,9 @@ fn differential_large_corpus() {
     build_large_corpus(dir.path());
     let config = WalkConfig::default();
 
-    for (name, pattern) in representative_queries() {
+    for (_name, pattern) in representative_queries() {
         let result = differential_compare(dir.path(), pattern, &config);
         assert_no_false_negatives(&result);
-        assert_eq!(
-            result.scan_files, result.index_files,
-            "mismatch for query '{}' ({})",
-            pattern, name,
-        );
     }
 }
 
@@ -280,12 +255,27 @@ fn differential_match_positions_small() {
     build_small_corpus(dir.path());
     let config = WalkConfig::default();
 
+    // Build index in a separate temp directory to avoid contaminating the corpus
+    let index_tmp = tempfile::tempdir().unwrap();
+    let index_dir = index_tmp.path().join("v1");
+    let files = qndx_core::walk::discover_and_read_files(dir.path(), &config);
+    build_index(&files, &index_dir, None).unwrap();
+
     for (_name, pattern) in representative_queries() {
         let scan_results = scan_search(dir.path(), pattern, &config).unwrap();
 
-        // TODO(M2): compare against index-backed match extraction.
-        // For now just verify scan results are deterministic.
-        let scan_results_2 = scan_search(dir.path(), pattern, &config).unwrap();
-        assert_eq!(scan_results.matches, scan_results_2.matches);
+        // Compare against index-backed match extraction
+        let index_results =
+            qndx_query::index_search(dir.path(), &index_dir, pattern).unwrap();
+
+        // Every scan match must appear in index results (no false negatives)
+        for scan_match in &scan_results.matches {
+            assert!(
+                index_results.results.matches.contains(scan_match),
+                "FALSE NEGATIVE (match-level) for pattern '{}': {:?} missing from index results",
+                pattern,
+                scan_match,
+            );
+        }
     }
 }

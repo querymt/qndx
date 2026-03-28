@@ -57,3 +57,4 @@ serde_json = "1"
 
 # Testing
 tempfile = "3"
+proptest = "1"
