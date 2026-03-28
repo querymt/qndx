@@ -1,11 +1,9 @@
 //! Benchmark: query planner
 //!
-//! Measures decomposition + lookup count estimation.
-//! Output: candidate set size, postings lookups, planning time.
+//! Measures decomposition + lookup count estimation for both trigram and sparse strategies.
+//! Output: candidate set size, postings lookups, planning time, strategy selection.
 
-use criterion::{
-    black_box, criterion_group, criterion_main, BenchmarkId, Criterion,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use qndx_bench::fixtures;
 use qndx_query::planner::plan_query;
 
@@ -18,24 +16,28 @@ fn bench_query_planner(c: &mut Criterion) {
     let patterns = fixtures::benchmark_patterns();
 
     for (name, pattern) in &patterns {
-        group.bench_with_input(
-            BenchmarkId::new("plan", name),
-            pattern,
-            |b, p| {
-                b.iter(|| {
-                    let plan = plan_query(black_box(p));
-                    black_box(plan);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("plan", name), pattern, |b, p| {
+            b.iter(|| {
+                let plan = plan_query(black_box(p));
+                black_box(plan);
+            });
+        });
     }
 
-    // Print plan summaries for reference
+    // Print plan summaries for reference (sparse vs trigram comparison)
+    eprintln!();
+    eprintln!("  {:<25} {:>8} {:>8} {:>8} {:>10} {:>10}", "pattern", "strategy", "lookups", "tri_grams", "spr_grams", "cost");
+    eprintln!("  {}", "-".repeat(75));
     for (name, pattern) in &patterns {
         let plan = plan_query(pattern);
         eprintln!(
-            "  [plan] {}: lookups={}, required_grams={}",
-            name, plan.lookup_count, plan.decomposition.required.len(),
+            "  {:<25} {:>8?} {:>8} {:>8} {:>10} {:>10.3}",
+            name,
+            plan.strategy,
+            plan.lookup_count,
+            plan.decomposition.required.len(),
+            plan.decomposition.sparse_required.len(),
+            plan.estimated_cost,
         );
     }
 

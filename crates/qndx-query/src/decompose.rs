@@ -2,9 +2,19 @@
 //!
 //! Handles top-level alternation (`a|b`) by producing separate branches
 //! with OR semantics. Within each branch, extracted trigrams use AND semantics.
+//!
+//! Also produces a sparse n-gram decomposition that can cover the same literals
+//! with fewer, longer n-grams for reduced posting lookups.
 
 use qndx_core::NgramHash;
-use qndx_index::extract_trigrams;
+use qndx_index::ngram::{extract_sparse_ngrams, extract_trigrams};
+
+/// A sparse n-gram with its hash and the byte length of the original gram.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SparseGram {
+    pub hash: NgramHash,
+    pub gram_len: usize,
+}
 
 /// Result of decomposing a regex into n-gram lookups.
 #[derive(Debug, Clone)]
@@ -16,6 +26,12 @@ pub struct Decomposition {
     /// Each branch is a set of required hashes (AND within branch).
     /// Used when the pattern contains top-level alternation.
     pub alternatives: Vec<Vec<NgramHash>>,
+    /// Sparse n-gram covering for required literals (AND semantics).
+    /// Each entry covers a contiguous span of the literal; together they
+    /// cover all positions, so using these instead of trigrams is sound.
+    pub sparse_required: Vec<SparseGram>,
+    /// Sparse n-gram covering for each alternative branch.
+    pub sparse_alternatives: Vec<Vec<SparseGram>>,
 }
 
 /// Decompose a regex pattern into n-gram lookups.
@@ -24,6 +40,9 @@ pub struct Decomposition {
 ///   becomes a separate alternative (OR semantics between branches,
 ///   AND semantics within each branch).
 /// - Otherwise, all extracted trigrams are required (AND semantics).
+///
+/// Also produces a sparse n-gram decomposition that covers the same literals
+/// with potentially fewer, longer n-grams.
 pub fn decompose_pattern(pattern: &str) -> Decomposition {
     let branches = split_top_level_alternation(pattern);
 
@@ -31,36 +50,80 @@ pub fn decompose_pattern(pattern: &str) -> Decomposition {
         // No alternation: all trigrams are required (AND)
         let literals = extract_literals(&branches[0]);
         let mut required = Vec::new();
+        let mut sparse_required = Vec::new();
         for lit in &literals {
             let trigrams = extract_trigrams(lit.as_bytes());
             required.extend(trigrams);
+
+            let sparse = extract_sparse_ngrams(lit.as_bytes());
+            for (hash, gram_len) in sparse {
+                sparse_required.push(SparseGram { hash, gram_len });
+            }
         }
         required.sort_unstable();
         required.dedup();
+        sparse_required.sort_unstable();
+        sparse_required.dedup();
 
         Decomposition {
             required,
             alternatives: Vec::new(),
+            sparse_required,
+            sparse_alternatives: Vec::new(),
         }
     } else {
         // Top-level alternation: each branch is an alternative (OR between branches)
         let mut alternatives = Vec::new();
+        let mut sparse_alternatives = Vec::new();
         for branch in &branches {
             let literals = extract_literals(branch);
             let mut hashes = Vec::new();
+            let mut sparse_branch = Vec::new();
             for lit in &literals {
                 let trigrams = extract_trigrams(lit.as_bytes());
                 hashes.extend(trigrams);
+
+                let sparse = extract_sparse_ngrams(lit.as_bytes());
+                for (hash, gram_len) in sparse {
+                    sparse_branch.push(SparseGram { hash, gram_len });
+                }
             }
             hashes.sort_unstable();
             hashes.dedup();
+            sparse_branch.sort_unstable();
+            sparse_branch.dedup();
             alternatives.push(hashes);
+            sparse_alternatives.push(sparse_branch);
         }
 
         Decomposition {
             required: Vec::new(),
             alternatives,
+            sparse_required: Vec::new(),
+            sparse_alternatives,
         }
+    }
+}
+
+/// Select a minimal sparse covering set from available sparse n-grams.
+///
+/// Given a list of sparse n-grams (each covering some byte span of the literal),
+/// and the trigram hashes for the same literal, returns a subset of sparse grams
+/// that fully covers the literal with fewer lookups than the trigram set.
+///
+/// If the sparse set cannot cover the literal (e.g., all grams are the same length
+/// as trigrams), returns None, signaling a fallback to trigrams.
+pub fn sparse_covering(sparse: &[SparseGram], trigram_count: usize) -> Option<Vec<SparseGram>> {
+    if sparse.is_empty() {
+        return None;
+    }
+
+    // The sparse n-grams already form a valid covering from the extraction algorithm.
+    // We only prefer sparse if it requires fewer lookups than the trigram path.
+    if sparse.len() < trigram_count {
+        Some(sparse.to_vec())
+    } else {
+        None // No benefit — fall back to trigrams
     }
 }
 

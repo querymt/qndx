@@ -8,10 +8,7 @@ pub fn extract_trigrams(data: &[u8]) -> Vec<NgramHash> {
     if data.len() < 3 {
         return Vec::new();
     }
-    let mut hashes: Vec<NgramHash> = data
-        .windows(3)
-        .map(|w| hash_ngram(w))
-        .collect();
+    let mut hashes: Vec<NgramHash> = data.windows(3).map(|w| hash_ngram(w)).collect();
     hashes.sort_unstable();
     hashes.dedup();
     hashes

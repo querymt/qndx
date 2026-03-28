@@ -2,33 +2,63 @@
 //!
 //! Full search pipeline: plan -> candidate generation -> verify.
 //! Output: end-to-end latency across query suites.
+//! Compares trigram-only vs planner-selected (potentially sparse) strategy.
 
-use criterion::{
-    black_box, criterion_group, criterion_main, BenchmarkId, Criterion,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use qndx_bench::fixtures;
-use qndx_index::ngram::extract_trigrams;
-use qndx_query::planner::plan_query;
+use qndx_index::ngram::{extract_sparse_ngrams, extract_trigrams};
+use qndx_query::planner::{plan_query, PlanStrategy};
 use qndx_query::verify::verify_candidates;
 
-/// Simulated end-to-end search: plan + trigram candidate filter + verify.
-fn search_pipeline(pattern: &str, files: &[(String, Vec<u8>)]) -> Vec<usize> {
+/// Build per-file n-gram lookup tables (both trigram and sparse).
+struct FileNgrams {
+    trigrams: Vec<Vec<u32>>,
+    /// Sparse n-gram hashes per file (sorted).
+    sparse: Vec<Vec<u32>>,
+}
+
+impl FileNgrams {
+    fn build(files: &[(String, Vec<u8>)]) -> Self {
+        let trigrams = files
+            .iter()
+            .map(|(_, content)| extract_trigrams(content))
+            .collect();
+        let sparse = files
+            .iter()
+            .map(|(_, content)| {
+                let mut hashes: Vec<u32> = extract_sparse_ngrams(content)
+                    .into_iter()
+                    .map(|(h, _)| h)
+                    .collect();
+                hashes.sort_unstable();
+                hashes.dedup();
+                hashes
+            })
+            .collect();
+        FileNgrams { trigrams, sparse }
+    }
+}
+
+/// End-to-end search using the planner-selected strategy.
+fn search_pipeline(
+    pattern: &str,
+    files: &[(String, Vec<u8>)],
+    file_ngrams: &FileNgrams,
+) -> Vec<usize> {
     let plan = plan_query(pattern);
 
-    // Build per-file trigram sets (in real usage these would be pre-indexed)
-    let file_trigrams: Vec<Vec<u32>> = files
-        .iter()
-        .map(|(_, content)| extract_trigrams(content))
-        .collect();
+    // Candidate generation: files whose n-grams contain all required hashes
+    let ngram_table = match plan.strategy {
+        PlanStrategy::Trigram => &file_ngrams.trigrams,
+        PlanStrategy::Sparse => &file_ngrams.sparse,
+    };
 
-    // Candidate generation: files whose trigrams contain all required grams
     let candidates: Vec<(usize, &[u8])> = files
         .iter()
         .enumerate()
         .filter(|(i, _)| {
-            let ft = &file_trigrams[*i];
-            plan.decomposition
-                .required
+            let ft = &ngram_table[*i];
+            plan.required_hashes
                 .iter()
                 .all(|req| ft.binary_search(req).is_ok())
         })
@@ -52,27 +82,37 @@ fn bench_end_to_end(c: &mut Criterion) {
         .map(|f| (f.path, f.content))
         .collect();
 
+    let file_ngrams = FileNgrams::build(&files);
     let patterns = fixtures::benchmark_patterns();
 
     for (name, pattern) in &patterns {
         group.bench_with_input(
             BenchmarkId::new("search", name),
-            &(&files, *pattern),
-            |b, (files, pattern)| {
+            &(&files, &file_ngrams, *pattern),
+            |b, (files, file_ngrams, pattern)| {
                 b.iter(|| {
-                    let results = search_pipeline(black_box(pattern), black_box(files));
+                    let results =
+                        search_pipeline(black_box(pattern), black_box(files), black_box(file_ngrams));
                     black_box(results);
                 });
             },
         );
     }
 
-    // Print candidate/match counts for reference
+    // Print candidate/match counts and strategy for reference
+    eprintln!();
+    eprintln!(
+        "  {:<25} {:>8} {:>8} {:>8}",
+        "pattern", "strategy", "matches", "total"
+    );
+    eprintln!("  {}", "-".repeat(55));
     for (name, pattern) in &patterns {
-        let matches = search_pipeline(pattern, &files);
+        let plan = plan_query(pattern);
+        let matches = search_pipeline(pattern, &files, &file_ngrams);
         eprintln!(
-            "  [e2e] {}: matches={}/{}",
+            "  {:<25} {:>8?} {:>8} {:>8}",
             name,
+            plan.strategy,
             matches.len(),
             files.len(),
         );
