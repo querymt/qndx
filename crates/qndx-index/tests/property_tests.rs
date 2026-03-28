@@ -3,7 +3,9 @@
 //! Uses proptest for randomized input coverage.
 
 use proptest::prelude::*;
-use qndx_core::format::{decode_postings, encode_postings};
+use qndx_core::format::{
+    decode_postings, decode_postings_varint, encode_postings, encode_postings_varint,
+};
 use qndx_core::FileId;
 use qndx_index::ngram::extract_trigrams;
 use qndx_index::postings::PostingList;
@@ -233,5 +235,57 @@ proptest! {
         let encoded = encode_postings(&ids);
         let decoded = decode_postings(&encoded);
         prop_assert_eq!(decoded, ids);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Varint postings encode/decode roundtrip
+// ---------------------------------------------------------------------------
+
+proptest! {
+    /// Varint encode/decode roundtrip for postings lists.
+    #[test]
+    fn postings_varint_encode_decode_roundtrip(ids in sorted_file_ids(200)) {
+        let encoded = encode_postings_varint(&ids);
+        let decoded = decode_postings_varint(&encoded);
+        prop_assert_eq!(decoded, ids);
+    }
+
+    /// Varint empty postings encode/decode correctly.
+    #[test]
+    fn postings_varint_encode_decode_empty(_dummy in 0u8..1) {
+        let ids: Vec<FileId> = vec![];
+        let encoded = encode_postings_varint(&ids);
+        let decoded = decode_postings_varint(&encoded);
+        prop_assert_eq!(decoded, ids);
+    }
+
+    /// Varint single-element postings encode/decode correctly.
+    #[test]
+    fn postings_varint_encode_decode_single(id in 0u32..100_000) {
+        let ids = vec![id];
+        let encoded = encode_postings_varint(&ids);
+        let decoded = decode_postings_varint(&encoded);
+        prop_assert_eq!(decoded, ids);
+    }
+
+    /// Varint encoding produces identical results to fixed-width for decode.
+    #[test]
+    fn varint_and_fixed_decode_same_ids(ids in sorted_file_ids(200)) {
+        let fixed_decoded = decode_postings(&encode_postings(&ids));
+        let varint_decoded = decode_postings_varint(&encode_postings_varint(&ids));
+        prop_assert_eq!(fixed_decoded, varint_decoded);
+    }
+
+    /// Varint encoding is always <= fixed-width encoding in size.
+    #[test]
+    fn varint_encoding_not_larger(ids in sorted_file_ids(200)) {
+        let fixed = encode_postings(&ids);
+        let varint = encode_postings_varint(&ids);
+        prop_assert!(
+            varint.len() <= fixed.len(),
+            "varint ({}) should be <= fixed ({}) for {} ids",
+            varint.len(), fixed.len(), ids.len()
+        );
     }
 }

@@ -215,7 +215,7 @@ pub fn deserialize_ngram_entry(buf: &[u8; NGRAM_ENTRY_SIZE]) -> crate::NgramEntr
 }
 
 // ---------------------------------------------------------------------------
-// Serialization helpers for postings (simple u32 delta encoding)
+// Serialization helpers for postings (delta encoding with fixed-width u32)
 // ---------------------------------------------------------------------------
 
 /// Encode a sorted list of FileIds as delta-encoded little-endian u32s.
@@ -251,6 +251,112 @@ pub fn decode_postings(data: &[u8]) -> Vec<FileId> {
         offset += 4;
     }
     ids
+}
+
+// ---------------------------------------------------------------------------
+// Serialization helpers for postings (delta encoding with varint compression)
+// ---------------------------------------------------------------------------
+
+/// Encode a u32 as a variable-length integer (LEB128-style).
+/// Returns the number of bytes written.
+fn encode_varint(mut value: u32, buf: &mut Vec<u8>) -> usize {
+    let mut count = 0;
+    loop {
+        let mut byte = (value & 0x7F) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        buf.push(byte);
+        count += 1;
+        if value == 0 {
+            break;
+        }
+    }
+    count
+}
+
+/// Decode a varint from a byte slice. Returns (value, bytes_consumed).
+/// Returns None if the slice is too short or the varint is malformed.
+fn decode_varint(data: &[u8]) -> Option<(u32, usize)> {
+    let mut result: u32 = 0;
+    let mut shift: u32 = 0;
+    for (i, &byte) in data.iter().enumerate() {
+        if shift >= 35 {
+            return None; // Overflow protection
+        }
+        result |= ((byte & 0x7F) as u32) << shift;
+        if byte & 0x80 == 0 {
+            return Some((result, i + 1));
+        }
+        shift += 7;
+    }
+    None // Unterminated varint
+}
+
+/// Encode a sorted list of FileIds as delta-encoded varints.
+/// Format: [count:varint] [delta_0:varint] [delta_1:varint] ...
+///
+/// This is more compact than the fixed-width encoding when deltas are small,
+/// which is common for posting lists with nearby file IDs.
+pub fn encode_postings_varint(ids: &[FileId]) -> Vec<u8> {
+    // Estimate: count varint + at most 5 bytes per delta
+    let mut buf = Vec::with_capacity(5 + ids.len() * 3);
+    encode_varint(ids.len() as u32, &mut buf);
+    let mut prev: u32 = 0;
+    for &id in ids {
+        let delta = id - prev;
+        encode_varint(delta, &mut buf);
+        prev = id;
+    }
+    buf
+}
+
+/// Decode varint delta-encoded postings back to a sorted Vec<FileId>.
+pub fn decode_postings_varint(data: &[u8]) -> Vec<FileId> {
+    if data.is_empty() {
+        return Vec::new();
+    }
+    let (count, mut offset) = match decode_varint(data) {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
+    let count = count as usize;
+    let mut ids = Vec::with_capacity(count);
+    let mut prev: u32 = 0;
+    for _ in 0..count {
+        if offset >= data.len() {
+            break;
+        }
+        let (delta, consumed) = match decode_varint(&data[offset..]) {
+            Some(v) => v,
+            None => break,
+        };
+        prev += delta;
+        ids.push(prev);
+        offset += consumed;
+    }
+    ids
+}
+
+/// Measure the encoded size of a posting list using varint encoding
+/// without actually allocating a full buffer. Useful for size comparisons.
+pub fn varint_encoded_size(ids: &[FileId]) -> usize {
+    fn varint_size(mut value: u32) -> usize {
+        let mut size = 1;
+        while value >= 0x80 {
+            value >>= 7;
+            size += 1;
+        }
+        size
+    }
+    let mut total = varint_size(ids.len() as u32);
+    let mut prev: u32 = 0;
+    for &id in ids {
+        total += varint_size(id - prev);
+        prev = id;
+    }
+    total
 }
 
 #[cfg(test)]
@@ -360,5 +466,98 @@ mod tests {
         let mut reader = Cursor::new(&buf);
         let read_payload = read_with_header(&mut reader, MAGIC_MANIFEST).unwrap();
         assert!(read_payload.is_empty());
+    }
+
+    // --- varint encoding tests ---
+
+    #[test]
+    fn varint_roundtrip_small() {
+        let mut buf = Vec::new();
+        encode_varint(0, &mut buf);
+        assert_eq!(buf.len(), 1);
+        assert_eq!(decode_varint(&buf), Some((0, 1)));
+
+        buf.clear();
+        encode_varint(127, &mut buf);
+        assert_eq!(buf.len(), 1);
+        assert_eq!(decode_varint(&buf), Some((127, 1)));
+    }
+
+    #[test]
+    fn varint_roundtrip_medium() {
+        let mut buf = Vec::new();
+        encode_varint(128, &mut buf);
+        assert_eq!(buf.len(), 2);
+        assert_eq!(decode_varint(&buf), Some((128, 2)));
+
+        buf.clear();
+        encode_varint(16383, &mut buf);
+        assert_eq!(buf.len(), 2);
+        assert_eq!(decode_varint(&buf), Some((16383, 2)));
+    }
+
+    #[test]
+    fn varint_roundtrip_large() {
+        let mut buf = Vec::new();
+        encode_varint(u32::MAX, &mut buf);
+        assert_eq!(buf.len(), 5);
+        assert_eq!(decode_varint(&buf), Some((u32::MAX, 5)));
+    }
+
+    #[test]
+    fn varint_postings_roundtrip() {
+        let ids = vec![1, 5, 10, 20, 100];
+        let encoded = encode_postings_varint(&ids);
+        let decoded = decode_postings_varint(&encoded);
+        assert_eq!(ids, decoded);
+    }
+
+    #[test]
+    fn varint_postings_empty() {
+        let ids: Vec<FileId> = vec![];
+        let encoded = encode_postings_varint(&ids);
+        let decoded = decode_postings_varint(&encoded);
+        assert_eq!(ids, decoded);
+    }
+
+    #[test]
+    fn varint_postings_single() {
+        let ids = vec![42];
+        let encoded = encode_postings_varint(&ids);
+        let decoded = decode_postings_varint(&encoded);
+        assert_eq!(ids, decoded);
+    }
+
+    #[test]
+    fn varint_postings_large_ids() {
+        let ids = vec![100_000, 200_000, 300_000, 400_000];
+        let encoded = encode_postings_varint(&ids);
+        let decoded = decode_postings_varint(&encoded);
+        assert_eq!(ids, decoded);
+    }
+
+    #[test]
+    fn varint_postings_consecutive() {
+        // Consecutive IDs: deltas are all 1 -> each is 1 byte
+        let ids: Vec<FileId> = (0..100).collect();
+        let encoded = encode_postings_varint(&ids);
+        let decoded = decode_postings_varint(&encoded);
+        assert_eq!(ids, decoded);
+        // varint should be much smaller than fixed-width
+        let fixed = encode_postings(&ids);
+        assert!(
+            encoded.len() < fixed.len(),
+            "varint ({}) should be smaller than fixed ({})",
+            encoded.len(),
+            fixed.len()
+        );
+    }
+
+    #[test]
+    fn varint_encoded_size_matches() {
+        let ids = vec![1, 5, 10, 20, 100, 1000, 10000];
+        let encoded = encode_postings_varint(&ids);
+        let estimated = varint_encoded_size(&ids);
+        assert_eq!(encoded.len(), estimated);
     }
 }
