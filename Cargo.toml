@@ -42,6 +42,9 @@ clap = { version = "4", features = ["derive"] }
 regex = "1"
 regex-syntax = "0.8"
 
+# File discovery (gitignore-aware walking)
+ignore = "0.4"
+
 # Hashing
 crc32fast = "1"
 
@@ -51,3 +54,6 @@ rand_chacha = "0.3"
 
 # Reporting
 serde_json = "1"
+
+# Testing
+tempfile = "3"
