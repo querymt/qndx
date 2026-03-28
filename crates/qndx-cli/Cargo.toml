@@ -1,0 +1,15 @@
+[package]
+name = "qndx-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI entrypoints for qndx (index/search/bench/report)"
+
+[dependencies]
+qndx-core = { workspace = true }
+qndx-index = { workspace = true }
+qndx-query = { workspace = true }
+qndx-git = { workspace = true }
+qndx-bench = { workspace = true }
+clap = { workspace = true }
+serde_json = { workspace = true }

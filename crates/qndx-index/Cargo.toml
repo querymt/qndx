@@ -1,0 +1,10 @@
+[package]
+name = "qndx-index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Index builder, storage writer/reader for qndx"
+
+[dependencies]
+qndx-core = { workspace = true }
+roaring = { workspace = true }

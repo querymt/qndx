@@ -1,0 +1,12 @@
+[package]
+name = "qndx-query"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Regex decomposition, candidate planner, and verifier for qndx"
+
+[dependencies]
+qndx-core = { workspace = true }
+qndx-index = { workspace = true }
+regex = { workspace = true }
+regex-syntax = { workspace = true }
