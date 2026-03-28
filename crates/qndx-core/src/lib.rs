@@ -2,6 +2,8 @@
 
 pub mod types;
 pub mod hash;
+pub mod walk;
+pub mod scan;
 
 pub use types::*;
 pub use hash::*;
