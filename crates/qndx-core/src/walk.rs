@@ -69,10 +69,7 @@ pub fn discover_files(root: &Path, config: &WalkConfig) -> Vec<DiscoveredFile> {
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
             // Only regular files
-            entry
-                .file_type()
-                .map(|ft| ft.is_file())
-                .unwrap_or(false)
+            entry.file_type().map(|ft| ft.is_file()).unwrap_or(false)
         })
         .filter_map(|entry| {
             let abs_path = entry.path().to_path_buf();

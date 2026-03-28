@@ -3,8 +3,8 @@
 //! All generators use a fixed seed so results are reproducible across runs.
 
 use rand::Rng;
-use rand_chacha::ChaCha8Rng;
 use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 
 /// Fixed seed for all fixture generation.
 const FIXTURE_SEED: u64 = 0xDEAD_BEEF_CAFE_1234;
@@ -32,26 +32,50 @@ impl Corpus {
 
 /// Identifier vocabulary for generating realistic source-code-like content.
 const IDENTIFIERS: &[&str] = &[
-    "MAX_FILE_SIZE", "min_buffer_len", "HttpResponse", "parse_config",
-    "DatabaseConnection", "handle_request", "serialize_data", "NodeVisitor",
-    "async_runtime", "thread_pool", "hash_map_entry", "BTreeMap",
-    "allocator", "TokenStream", "write_output", "read_input",
-    "transform_ast", "compile_module", "link_objects", "optimize_ir",
-    "register_callback", "emit_event", "process_batch", "validate_schema",
-    "render_template", "route_handler", "middleware_chain", "error_boundary",
-    "retry_policy", "circuit_breaker", "load_balancer", "rate_limiter",
+    "MAX_FILE_SIZE",
+    "min_buffer_len",
+    "HttpResponse",
+    "parse_config",
+    "DatabaseConnection",
+    "handle_request",
+    "serialize_data",
+    "NodeVisitor",
+    "async_runtime",
+    "thread_pool",
+    "hash_map_entry",
+    "BTreeMap",
+    "allocator",
+    "TokenStream",
+    "write_output",
+    "read_input",
+    "transform_ast",
+    "compile_module",
+    "link_objects",
+    "optimize_ir",
+    "register_callback",
+    "emit_event",
+    "process_batch",
+    "validate_schema",
+    "render_template",
+    "route_handler",
+    "middleware_chain",
+    "error_boundary",
+    "retry_policy",
+    "circuit_breaker",
+    "load_balancer",
+    "rate_limiter",
 ];
 
 /// Keywords and operators that appear in source code.
 const KEYWORDS: &[&str] = &[
-    "fn ", "let ", "mut ", "pub ", "struct ", "impl ", "enum ", "match ",
-    "if ", "else ", "for ", "while ", "return ", "use ", "mod ", "trait ",
-    "const ", "static ", "async ", "await ", "type ", "where ",
+    "fn ", "let ", "mut ", "pub ", "struct ", "impl ", "enum ", "match ", "if ", "else ", "for ",
+    "while ", "return ", "use ", "mod ", "trait ", "const ", "static ", "async ", "await ",
+    "type ", "where ",
 ];
 
 const OPERATORS: &[&str] = &[
-    " = ", " == ", " != ", " => ", " -> ", "::", ".", ",", ";", "(", ")",
-    "{", "}", "[", "]", " + ", " - ", " * ", " / ", " & ", " | ",
+    " = ", " == ", " != ", " => ", " -> ", "::", ".", ",", ";", "(", ")", "{", "}", "[", "]",
+    " + ", " - ", " * ", " / ", " & ", " | ",
 ];
 
 /// Generate a single synthetic source file with the given RNG.
@@ -80,9 +104,13 @@ fn generate_source_file(rng: &mut ChaCha8Rng, approx_size: usize) -> Vec<u8> {
             let s: Vec<u8> = (0..len)
                 .map(|_| {
                     let c = rng.gen_range(0..62);
-                    if c < 26 { b'a' + c }
-                    else if c < 52 { b'A' + (c - 26) }
-                    else { b'0' + (c - 52) }
+                    if c < 26 {
+                        b'a' + c
+                    } else if c < 52 {
+                        b'A' + (c - 26)
+                    } else {
+                        b'0' + (c - 52)
+                    }
                 })
                 .collect();
             content.extend_from_slice(&s);

@@ -6,9 +6,7 @@
 //! Note: this benchmark uses stub implementations for M0.
 //! Real gix integration will be added in M5.
 
-use criterion::{
-    black_box, criterion_group, criterion_main, Criterion,
-};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use qndx_git::{detect_dirty_files, head_commit};
 
 fn bench_git_overlay(c: &mut Criterion) {

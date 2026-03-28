@@ -4,13 +4,11 @@
 //! Workload: intersection/union over low/medium/high cardinality postings.
 //! Output: query op latency + memory footprint.
 
-use criterion::{
-    black_box, criterion_group, criterion_main, BenchmarkId, Criterion,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use qndx_index::postings::PostingList;
 use rand::Rng;
-use rand_chacha::ChaCha8Rng;
 use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 
 const SEED: u64 = 0xBEEF_CAFE_1234_5678;
 

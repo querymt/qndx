@@ -267,7 +267,10 @@ fn pattern_function_signature() {
 fn pattern_rust_use_statement() {
     let content = "use std::collections::HashMap;\nuse regex::Regex;\nlet x = 1;\n";
     let texts = matched_texts(r"use [\w:]+;", content);
-    assert_eq!(texts, vec!["use std::collections::HashMap;", "use regex::Regex;"]);
+    assert_eq!(
+        texts,
+        vec!["use std::collections::HashMap;", "use regex::Regex;"]
+    );
 }
 
 #[test]

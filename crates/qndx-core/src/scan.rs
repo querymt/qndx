@@ -37,7 +37,11 @@ pub struct SearchResults {
 ///
 /// This is the correctness oracle. Output is deterministic: matches are sorted
 /// by (path, line, column).
-pub fn scan_search(root: &Path, pattern: &str, config: &WalkConfig) -> Result<SearchResults, String> {
+pub fn scan_search(
+    root: &Path,
+    pattern: &str,
+    config: &WalkConfig,
+) -> Result<SearchResults, String> {
     let re = Regex::new(pattern).map_err(|e| format!("invalid regex: {}", e))?;
     let files = walk::discover_files(root, config);
 
@@ -141,7 +145,11 @@ pub fn file_matches(pattern: &str, content: &[u8]) -> Result<bool, String> {
 
 /// Return just the set of file paths that match (no positions).
 /// Useful for differential testing against index-backed candidate sets.
-pub fn scan_matching_files(root: &Path, pattern: &str, config: &WalkConfig) -> Result<Vec<String>, String> {
+pub fn scan_matching_files(
+    root: &Path,
+    pattern: &str,
+    config: &WalkConfig,
+) -> Result<Vec<String>, String> {
     let re = Regex::new(pattern).map_err(|e| format!("invalid regex: {}", e))?;
     let files = walk::discover_files(root, config);
 
@@ -269,7 +277,8 @@ mod tests {
     #[test]
     fn scan_matching_files_basic() {
         let dir = setup_search_dir();
-        let matches = scan_matching_files(dir.path(), "MAX_FILE_SIZE", &WalkConfig::default()).unwrap();
+        let matches =
+            scan_matching_files(dir.path(), "MAX_FILE_SIZE", &WalkConfig::default()).unwrap();
 
         // main.rs, lib.rs, src/util.rs all contain MAX_FILE_SIZE
         assert_eq!(matches.len(), 3);

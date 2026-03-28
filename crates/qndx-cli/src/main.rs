@@ -10,7 +10,10 @@ use std::time::Instant;
 const DEFAULT_INDEX_DIR: &str = ".qndx/index/v1";
 
 #[derive(Parser)]
-#[command(name = "qndx", about = "Fast regex search indexer for large repositories")]
+#[command(
+    name = "qndx",
+    about = "Fast regex search indexer for large repositories"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

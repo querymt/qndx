@@ -15,20 +15,24 @@ use std::io::BufWriter;
 use std::path::Path;
 
 use qndx_core::format::{
-    self, encode_postings, serialize_ngram_entry, MAGIC_MANIFEST, MAGIC_NGRAMS, MAGIC_POSTINGS,
-    NGRAM_ENTRY_SIZE,
+    self, encode_postings, serialize_ngram_entry, FLAG_SPARSE, MAGIC_MANIFEST, MAGIC_NGRAMS,
+    MAGIC_POSTINGS, NGRAM_ENTRY_SIZE,
 };
 use qndx_core::{FileId, Manifest, NgramEntry, NgramHash};
 
-use crate::ngram::extract_trigrams;
+use crate::ngram::{extract_sparse_ngrams, extract_trigrams};
 
 /// Result of building an index.
 #[derive(Debug)]
 pub struct BuildResult {
     /// Number of files indexed.
     pub file_count: u32,
-    /// Number of unique trigrams.
+    /// Number of unique n-grams (trigrams + sparse).
     pub ngram_count: u32,
+    /// Number of trigram-only entries.
+    pub trigram_count: u32,
+    /// Number of sparse n-gram entries.
+    pub sparse_count: u32,
     /// Total bytes of postings data.
     pub postings_bytes: u64,
     /// Total bytes of source files processed.
@@ -46,22 +50,31 @@ pub fn build_index(
 ) -> Result<BuildResult, format::FormatError> {
     fs::create_dir_all(index_dir)?;
 
-    // Step 1: Build inverted index (trigram_hash -> sorted Vec<FileId>)
+    // Step 1: Build inverted index (ngram_hash -> sorted Vec<FileId>)
+    // We track which hashes are sparse vs trigram via a separate set.
     let mut inverted: BTreeMap<NgramHash, Vec<FileId>> = BTreeMap::new();
+    let mut sparse_hashes: std::collections::HashSet<NgramHash> = std::collections::HashSet::new();
     let mut source_bytes: u64 = 0;
 
     for (file_id, (_path, content)) in files.iter().enumerate() {
         source_bytes += content.len() as u64;
+        let fid = file_id as FileId;
+
+        // Extract trigrams (baseline)
         let trigrams = extract_trigrams(content);
         for hash in trigrams {
-            inverted
-                .entry(hash)
-                .or_default()
-                .push(file_id as FileId);
+            inverted.entry(hash).or_default().push(fid);
+        }
+
+        // Extract sparse n-grams (build-all approach)
+        let sparse = extract_sparse_ngrams(content);
+        for (hash, _len) in sparse {
+            sparse_hashes.insert(hash);
+            inverted.entry(hash).or_default().push(fid);
         }
     }
 
-    // Deduplicate postings (trigrams from same file should not duplicate the file_id)
+    // Deduplicate postings (same file should not appear twice for same n-gram)
     for posting in inverted.values_mut() {
         posting.sort_unstable();
         posting.dedup();
@@ -70,6 +83,8 @@ pub fn build_index(
     // Step 2: Serialize postings into a contiguous buffer
     let mut postings_payload = Vec::new();
     let mut ngram_entries: Vec<NgramEntry> = Vec::with_capacity(inverted.len());
+    let mut trigram_count: u32 = 0;
+    let mut sparse_count: u32 = 0;
 
     for (&hash, ids) in &inverted {
         let encoded = encode_postings(ids);
@@ -77,11 +92,19 @@ pub fn build_index(
         let len = encoded.len() as u32;
         postings_payload.extend_from_slice(&encoded);
 
+        let flags = if sparse_hashes.contains(&hash) {
+            sparse_count += 1;
+            FLAG_SPARSE
+        } else {
+            trigram_count += 1;
+            0
+        };
+
         ngram_entries.push(NgramEntry {
             hash,
             offset,
             len,
-            flags: 0,
+            flags,
         });
     }
 
@@ -127,6 +150,8 @@ pub fn build_index(
     Ok(BuildResult {
         file_count: files.len() as u32,
         ngram_count: ngram_entries.len() as u32,
+        trigram_count,
+        sparse_count,
         postings_bytes: postings_payload.len() as u64,
         source_bytes,
     })
@@ -199,12 +224,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let index_dir = dir.path().join("index/v1");
 
-        let result = build_index(
-            &sample_files(),
-            &index_dir,
-            Some("abc123".to_string()),
-        )
-        .unwrap();
+        let result = build_index(&sample_files(), &index_dir, Some("abc123".to_string())).unwrap();
 
         assert_eq!(result.file_count, 3);
     }
@@ -217,8 +237,26 @@ mod tests {
 
         let result = build_index(&files, &index_dir, None).unwrap();
 
-        // "ab" has no trigrams
+        // "ab" has no trigrams but produces a sparse bigram
         assert_eq!(result.file_count, 1);
-        assert_eq!(result.ngram_count, 0);
+        assert_eq!(result.trigram_count, 0);
+        assert!(result.ngram_count >= result.sparse_count);
+    }
+
+    #[test]
+    fn build_includes_sparse_ngrams() {
+        let dir = tempfile::tempdir().unwrap();
+        let index_dir = dir.path().join("index/v1");
+
+        let result = build_index(&sample_files(), &index_dir, None).unwrap();
+
+        // Should have both trigrams and sparse n-grams
+        assert!(result.trigram_count > 0, "should have trigrams");
+        assert!(result.sparse_count > 0, "should have sparse n-grams");
+        assert_eq!(
+            result.ngram_count,
+            result.trigram_count + result.sparse_count,
+            "total should equal trigram + sparse (note: some hashes may overlap and be counted as sparse)"
+        );
     }
 }

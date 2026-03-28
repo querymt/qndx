@@ -4,9 +4,7 @@
 //! Workload: manifest encode/decode at realistic sizes and frequencies.
 //! Output: latency, throughput, encoded size.
 
-use criterion::{
-    black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
 fn bench_serializer_choice(c: &mut Criterion) {
     let manifests = qndx_bench::fixtures::sample_manifests();

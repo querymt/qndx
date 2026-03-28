@@ -46,12 +46,8 @@ impl PostingList {
     /// Intersect two posting lists.
     pub fn intersect(&self, other: &PostingList) -> PostingList {
         match (self, other) {
-            (PostingList::Vec(a), PostingList::Vec(b)) => {
-                PostingList::Vec(vec_intersect(a, b))
-            }
-            (PostingList::Roaring(a), PostingList::Roaring(b)) => {
-                PostingList::Roaring(a & b)
-            }
+            (PostingList::Vec(a), PostingList::Vec(b)) => PostingList::Vec(vec_intersect(a, b)),
+            (PostingList::Roaring(a), PostingList::Roaring(b)) => PostingList::Roaring(a & b),
             (PostingList::Vec(v), PostingList::Roaring(r))
             | (PostingList::Roaring(r), PostingList::Vec(v)) => {
                 let result: Vec<FileId> = v.iter().copied().filter(|id| r.contains(*id)).collect();
@@ -63,12 +59,8 @@ impl PostingList {
     /// Union two posting lists.
     pub fn union(&self, other: &PostingList) -> PostingList {
         match (self, other) {
-            (PostingList::Vec(a), PostingList::Vec(b)) => {
-                PostingList::from_vec(vec_union(a, b))
-            }
-            (PostingList::Roaring(a), PostingList::Roaring(b)) => {
-                PostingList::Roaring(a | b)
-            }
+            (PostingList::Vec(a), PostingList::Vec(b)) => PostingList::from_vec(vec_union(a, b)),
+            (PostingList::Roaring(a), PostingList::Roaring(b)) => PostingList::Roaring(a | b),
             (PostingList::Vec(v), PostingList::Roaring(r))
             | (PostingList::Roaring(r), PostingList::Vec(v)) => {
                 let mut result = r.clone();
