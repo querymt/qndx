@@ -3,7 +3,7 @@
 use clap::{Parser, Subcommand};
 use qndx_core::scan;
 use qndx_core::walk::WalkConfig;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 /// Default index directory relative to the repository root.
@@ -183,8 +183,8 @@ fn main() {
 }
 
 fn run_index_search(
-    root: &PathBuf,
-    index_dir: &PathBuf,
+    root: &Path,
+    index_dir: &Path,
     pattern: &str,
     files_only: bool,
     show_stats: bool,
@@ -236,7 +236,7 @@ fn run_index_search(
 }
 
 fn run_scan_search(
-    root: &PathBuf,
+    root: &Path,
     pattern: &str,
     config: &WalkConfig,
     files_only: bool,

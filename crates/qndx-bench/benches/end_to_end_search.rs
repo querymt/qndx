@@ -4,11 +4,12 @@
 //! Output: end-to-end latency across query suites.
 //! Compares trigram-only vs planner-selected (potentially sparse) strategy.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use qndx_bench::fixtures;
 use qndx_index::ngram::{extract_sparse_ngrams, extract_trigrams};
 use qndx_query::planner::{plan_query, PlanStrategy};
 use qndx_query::verify::verify_candidates;
+use std::hint::black_box;
 
 /// Build per-file n-gram lookup tables (both trigram and sparse).
 struct FileNgrams {
@@ -91,8 +92,11 @@ fn bench_end_to_end(c: &mut Criterion) {
             &(&files, &file_ngrams, *pattern),
             |b, (files, file_ngrams, pattern)| {
                 b.iter(|| {
-                    let results =
-                        search_pipeline(black_box(pattern), black_box(files), black_box(file_ngrams));
+                    let results = search_pipeline(
+                        black_box(pattern),
+                        black_box(files),
+                        black_box(file_ngrams),
+                    );
                     black_box(results);
                 });
             },

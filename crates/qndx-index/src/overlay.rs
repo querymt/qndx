@@ -24,16 +24,16 @@ pub struct OverlayIndex {
     /// Inverted index: ngram_hash -> set of overlay file IDs.
     /// File IDs start from a high offset to avoid collision with baseline IDs.
     ngrams: HashMap<NgramHash, Vec<FileId>>,
-    
+
     /// Map from overlay file ID to relative path.
     files: Vec<PathBuf>,
-    
+
     /// Map from relative path to overlay file ID (for quick lookups).
     path_to_id: HashMap<PathBuf, FileId>,
-    
+
     /// Set of file paths that have been deleted (to exclude from baseline).
     deleted: HashSet<PathBuf>,
-    
+
     /// Starting file ID offset (to avoid collision with baseline index).
     /// We use high file IDs (e.g., starting from 1_000_000_000).
     base_file_id: FileId,
@@ -88,13 +88,21 @@ impl OverlayIndex {
     }
 
     /// Detect dirty files using Git and build an overlay.
-    pub fn from_git_repo(repo: &GitRepo, base_file_id: FileId) -> Result<Self, Box<dyn std::error::Error>> {
-        let repo_root = repo.root_path()
+    pub fn from_git_repo(
+        repo: &GitRepo,
+        base_file_id: FileId,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let repo_root = repo
+            .root_path()
             .ok_or("repository has no working directory")?;
-        
+
         let dirty_files = repo.detect_dirty_files()?;
-        
-        Ok(Self::from_dirty_files(repo_root, &dirty_files, base_file_id)?)
+
+        Ok(Self::from_dirty_files(
+            repo_root,
+            &dirty_files,
+            base_file_id,
+        )?)
     }
 
     /// Add or update a file in the overlay.
@@ -150,7 +158,7 @@ impl OverlayIndex {
         for posting in self.ngrams.values_mut() {
             posting.retain(|&id| id != file_id);
         }
-        
+
         // Clean up empty postings
         self.ngrams.retain(|_, posting| !posting.is_empty());
     }

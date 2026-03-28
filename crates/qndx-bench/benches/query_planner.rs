@@ -3,9 +3,10 @@
 //! Measures decomposition + lookup count estimation for both trigram and sparse strategies.
 //! Output: candidate set size, postings lookups, planning time, strategy selection.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use qndx_bench::fixtures;
 use qndx_query::planner::plan_query;
+use std::hint::black_box;
 
 fn bench_query_planner(c: &mut Criterion) {
     let mut group = c.benchmark_group("query_planner");
@@ -26,7 +27,10 @@ fn bench_query_planner(c: &mut Criterion) {
 
     // Print plan summaries for reference (sparse vs trigram comparison)
     eprintln!();
-    eprintln!("  {:<25} {:>8} {:>8} {:>8} {:>10} {:>10}", "pattern", "strategy", "lookups", "tri_grams", "spr_grams", "cost");
+    eprintln!(
+        "  {:<25} {:>8} {:>8} {:>8} {:>10} {:>10}",
+        "pattern", "strategy", "lookups", "tri_grams", "spr_grams", "cost"
+    );
     eprintln!("  {}", "-".repeat(75));
     for (name, pattern) in &patterns {
         let plan = plan_query(pattern);

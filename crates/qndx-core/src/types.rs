@@ -9,7 +9,9 @@ pub type FileId = u32;
 pub type NgramHash = u32;
 
 /// Manifest metadata stored alongside the index.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, wincode::SchemaWrite, wincode::SchemaRead)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, PartialEq, Eq, wincode::SchemaWrite, wincode::SchemaRead,
+)]
 pub struct Manifest {
     /// Format version.
     pub version: u32,

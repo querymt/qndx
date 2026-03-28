@@ -8,11 +8,12 @@
 //! - Choose hybrid when it is >=10% faster end-to-end query latency
 //!   than single-format options and memory/index size does not exceed budget.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use qndx_index::postings::PostingList;
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
+use std::hint::black_box;
 
 const SEED: u64 = 0xBEEF_CAFE_1234_5678;
 
@@ -203,13 +204,22 @@ fn bench_postings_encode_decode(c: &mut Criterion) {
         // Print encoded sizes for reference
         if label == &"high" {
             eprintln!();
-            eprintln!("  === Encoded sizes for '{}' cardinality ({} ids) ===", label, ids.len());
+            eprintln!(
+                "  === Encoded sizes for '{}' cardinality ({} ids) ===",
+                label,
+                ids.len()
+            );
             eprintln!("    vec_fixed  : {:>8} bytes", fixed_bytes.len());
             eprintln!("    vec_varint : {:>8} bytes", varint_bytes.len());
             eprintln!("    roaring    : {:>8} bytes", roaring_bytes.len());
-            eprintln!("    hybrid_auto: {:>8} bytes ({})",
+            eprintln!(
+                "    hybrid_auto: {:>8} bytes ({})",
                 hybrid_bytes.len(),
-                if hybrid_pl.is_roaring() { "roaring" } else { "varint" },
+                if hybrid_pl.is_roaring() {
+                    "roaring"
+                } else {
+                    "varint"
+                },
             );
         }
     }
@@ -217,5 +227,9 @@ fn bench_postings_encode_decode(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_postings_intersect_union, bench_postings_encode_decode);
+criterion_group!(
+    benches,
+    bench_postings_intersect_union,
+    bench_postings_encode_decode
+);
 criterion_main!(benches);

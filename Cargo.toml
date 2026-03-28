@@ -23,7 +23,7 @@ qndx-git = { path = "crates/qndx-git" }
 qndx-bench = { path = "crates/qndx-bench" }
 
 # Benchmark framework
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 
 # Serialization candidates (for decision gate A)
 postcard = { version = "1", features = ["alloc"] }
@@ -34,7 +34,7 @@ serde = { version = "1", features = ["derive"] }
 roaring = "0.10"
 
 # Git integration
-gix = { version = "0.69", default-features = false, features = ["basic", "worktree-mutation"] }
+gix = { version = "0.80", default-features = false, features = ["basic", "worktree-mutation"] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }

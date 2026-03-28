@@ -97,20 +97,14 @@ pub fn plan_query(pattern: &str) -> QueryPlan {
 }
 
 /// Create a query plan using a custom selectivity estimator.
-pub fn plan_query_with_estimator(
-    pattern: &str,
-    estimator: &dyn SelectivityEstimator,
-) -> QueryPlan {
+pub fn plan_query_with_estimator(pattern: &str, estimator: &dyn SelectivityEstimator) -> QueryPlan {
     let decomposition = decompose_pattern(pattern);
 
     // --- Build trigram plan ---
     let trigram_required = decomposition.required.clone();
     let trigram_alternatives = decomposition.alternatives.clone();
-    let trigram_lookup_count = trigram_required.len()
-        + trigram_alternatives
-            .iter()
-            .map(|a| a.len())
-            .sum::<usize>();
+    let trigram_lookup_count =
+        trigram_required.len() + trigram_alternatives.iter().map(|a| a.len()).sum::<usize>();
     let trigram_cost: f64 = trigram_required
         .iter()
         .map(|&h| estimator.estimate(h, 3))
@@ -165,13 +159,16 @@ pub fn plan_query_with_estimator(
     }
 }
 
+/// Return type of [`build_sparse_plan`]: `(required_hashes, alt_hash_sets, cost, lookup_count)`.
+type SparsePlanResult = Option<(Vec<NgramHash>, Vec<Vec<NgramHash>>, f64, usize)>;
+
 /// Try to build a sparse plan. Returns None if sparse coverage is incomplete.
 fn build_sparse_plan(
     sparse_req: &Option<Vec<SparseGram>>,
     sparse_alts: &[Option<Vec<SparseGram>>],
     no_required: bool,
     estimator: &dyn SelectivityEstimator,
-) -> Option<(Vec<NgramHash>, Vec<Vec<NgramHash>>, f64, usize)> {
+) -> SparsePlanResult {
     let req_hashes: Vec<NgramHash>;
     let mut cost: f64;
 
@@ -207,8 +204,7 @@ fn build_sparse_plan(
         }
     }
 
-    let lookups = req_hashes.len()
-        + alt_hashes.iter().map(|a| a.len()).sum::<usize>();
+    let lookups = req_hashes.len() + alt_hashes.iter().map(|a| a.len()).sum::<usize>();
 
     Some((req_hashes, alt_hashes, cost, lookups))
 }
@@ -235,9 +231,7 @@ mod tests {
     fn plan_picks_strategy() {
         let plan = plan_query("MAX_FILE_SIZE");
         // Should have picked one of the two strategies
-        assert!(
-            plan.strategy == PlanStrategy::Trigram || plan.strategy == PlanStrategy::Sparse
-        );
+        assert!(plan.strategy == PlanStrategy::Trigram || plan.strategy == PlanStrategy::Sparse);
     }
 
     #[test]

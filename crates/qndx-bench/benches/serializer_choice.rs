@@ -9,7 +9,8 @@
 //!   AND no compatibility/maintenance concerns arise, choose wincode.
 //! - Otherwise choose postcard for simplicity and stable wire format.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use std::hint::black_box;
 
 fn bench_serializer_choice(c: &mut Criterion) {
     let manifests = qndx_bench::fixtures::sample_manifests();
@@ -105,7 +106,10 @@ fn bench_serializer_choice(c: &mut Criterion) {
         // Print encoded sizes for reference (once, outside timing)
         if label == "large" {
             eprintln!();
-            eprintln!("  === Encoded sizes for '{}' manifest ({} files) ===", label, manifest.file_count);
+            eprintln!(
+                "  === Encoded sizes for '{}' manifest ({} files) ===",
+                label, manifest.file_count
+            );
             eprintln!("    postcard : {:>8} bytes", postcard_bytes.len());
             eprintln!("    wincode  : {:>8} bytes", wincode_bytes.len());
             eprintln!("    json     : {:>8} bytes", json_bytes.len());

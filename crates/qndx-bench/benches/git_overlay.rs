@@ -6,8 +6,10 @@
 //! Note: this benchmark uses stub implementations for M0.
 //! Real gix integration will be added in M5.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use qndx_git::{detect_dirty_files, head_commit};
+use std::hint::black_box;
+use std::path::Path;
 
 fn bench_git_overlay(c: &mut Criterion) {
     let mut group = c.benchmark_group("git_overlay");
@@ -18,16 +20,16 @@ fn bench_git_overlay(c: &mut Criterion) {
     // Benchmark: dirty file detection (stub for now)
     group.bench_function("detect_dirty_files", |b| {
         b.iter(|| {
-            let dirty = detect_dirty_files(black_box("."));
-            black_box(dirty);
+            let dirty = detect_dirty_files(black_box(Path::new(".")));
+            let _ = black_box(dirty);
         });
     });
 
     // Benchmark: HEAD commit lookup (stub for now)
     group.bench_function("head_commit", |b| {
         b.iter(|| {
-            let commit = head_commit(black_box("."));
-            black_box(commit);
+            let commit = head_commit(black_box(Path::new(".")));
+            let _ = black_box(commit);
         });
     });
 

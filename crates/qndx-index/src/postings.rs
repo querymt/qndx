@@ -200,8 +200,7 @@ impl PostingList {
                 Some(PostingList::Vec(ids))
             }
             TAG_ROARING => {
-                let bitmap =
-                    RoaringBitmap::deserialize_from(Cursor::new(payload)).ok()?;
+                let bitmap = RoaringBitmap::deserialize_from(Cursor::new(payload)).ok()?;
                 Some(PostingList::Roaring(bitmap))
             }
             _ => None,

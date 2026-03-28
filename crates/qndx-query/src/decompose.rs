@@ -188,11 +188,11 @@ fn split_top_level_alternation(pattern: &str) -> Vec<String> {
 fn extract_literals(pattern: &str) -> Vec<String> {
     let mut literals = Vec::new();
     let mut current = String::new();
-    let mut chars = pattern.chars().peekable();
+    let chars = pattern.chars();
     let mut escaped = false;
     let mut in_bracket = false;
 
-    while let Some(ch) = chars.next() {
+    for ch in chars {
         if escaped {
             if in_bracket {
                 // Inside a bracket expression — skip everything

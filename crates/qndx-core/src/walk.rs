@@ -75,10 +75,8 @@ pub fn discover_files(root: &Path, config: &WalkConfig) -> Vec<DiscoveredFile> {
             let abs_path = entry.path().to_path_buf();
 
             // Binary detection: check first 8KB for null bytes
-            if config.skip_binary {
-                if is_likely_binary(&abs_path) {
-                    return None;
-                }
+            if config.skip_binary && is_likely_binary(&abs_path) {
+                return None;
             }
 
             let rel_path = abs_path

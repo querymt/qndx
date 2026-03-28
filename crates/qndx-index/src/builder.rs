@@ -142,8 +142,8 @@ pub fn build_index(
         files: files.iter().map(|(path, _)| path.clone()).collect(),
     };
 
-    let manifest_bytes = postcard::to_allocvec(&manifest)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    let manifest_bytes =
+        postcard::to_allocvec(&manifest).map_err(|e| std::io::Error::other(e.to_string()))?;
 
     {
         let file = fs::File::create(index_dir.join("manifest.bin"))?;

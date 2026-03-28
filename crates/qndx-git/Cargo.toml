@@ -7,7 +7,7 @@ description = "Git integration (gix-first) for qndx freshness model"
 
 [dependencies]
 qndx-core = { workspace = true }
-gix = "0.68"
+gix = { workspace = true }
 thiserror = "2.0"
 
 [dev-dependencies]
