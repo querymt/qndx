@@ -1,8 +1,9 @@
 //! qndx CLI: index, search, bench, and report commands.
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use qndx_core::scan;
 use qndx_core::walk::WalkConfig;
+use qndx_query::StrategyOverride;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -67,12 +68,44 @@ enum Commands {
         /// Force scan-only mode (ignore index even if present)
         #[arg(long)]
         scan: bool,
+        /// N-gram strategy: auto (default), trigram, or sparse
+        #[arg(long, default_value = "auto")]
+        strategy: StrategyArg,
+    },
+    /// Show query plan diagnostics (decomposition, costs, strategy selection)
+    Plan {
+        /// Regex pattern to analyze
+        pattern: String,
+        /// Force a specific strategy for the plan
+        #[arg(long, default_value = "auto")]
+        strategy: StrategyArg,
     },
     /// Benchmark operations
     Bench {
         #[command(subcommand)]
         action: BenchAction,
     },
+}
+
+/// N-gram strategy selection for the CLI.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum StrategyArg {
+    /// Let the planner pick the best strategy
+    Auto,
+    /// Force trigram decomposition
+    Trigram,
+    /// Force sparse n-gram covering
+    Sparse,
+}
+
+impl From<StrategyArg> for StrategyOverride {
+    fn from(arg: StrategyArg) -> Self {
+        match arg {
+            StrategyArg::Auto => StrategyOverride::Auto,
+            StrategyArg::Trigram => StrategyOverride::ForceTrigram,
+            StrategyArg::Sparse => StrategyOverride::ForceSparse,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -85,6 +118,18 @@ enum BenchAction {
         /// Path to Criterion target directory
         #[arg(long, default_value = "target/criterion")]
         criterion_dir: String,
+    },
+    /// Check performance budgets against baseline
+    CheckBudgets {
+        /// Path to benchmark comparison output (JSON)
+        #[arg(short, long)]
+        comparison: Option<PathBuf>,
+        /// Path to budgets configuration file
+        #[arg(long, default_value = "benchmarks/budgets.toml")]
+        budgets: PathBuf,
+        /// Fail on critical budget violations
+        #[arg(long, default_value = "true")]
+        fail_on_critical: bool,
     },
 }
 
@@ -140,6 +185,7 @@ fn main() {
             files_only,
             stats,
             scan: force_scan,
+            strategy,
         } => {
             let root = root.unwrap_or_else(|| PathBuf::from("."));
             let config = WalkConfig {
@@ -148,6 +194,7 @@ fn main() {
                 skip_binary: !binary,
                 ..Default::default()
             };
+            let strategy_override: StrategyOverride = strategy.into();
 
             // Determine if we should use index-backed search
             let effective_index_dir = if force_scan {
@@ -165,11 +212,71 @@ fn main() {
 
             if let Some(idx_dir) = effective_index_dir {
                 // Index-backed search
-                run_index_search(&root, &idx_dir, &pattern, files_only, stats, start);
+                run_index_search(
+                    &root,
+                    &idx_dir,
+                    &pattern,
+                    files_only,
+                    stats,
+                    start,
+                    strategy_override,
+                );
             } else {
                 // Scan-only search
                 run_scan_search(&root, &pattern, &config, files_only, stats, start);
             }
+        }
+        Commands::Plan { pattern, strategy } => {
+            let strategy_override: StrategyOverride = strategy.into();
+            let diag = qndx_query::plan_diagnostics_with_strategy(&pattern, strategy_override);
+
+            println!("Pattern: {}", pattern);
+            println!();
+
+            if diag.literals.is_empty() {
+                println!("Literals: (none extracted)");
+            } else {
+                println!("Literals: {:?}", diag.literals);
+            }
+            println!();
+
+            println!("Trigram plan:");
+            println!("  lookups: {}", diag.trigram_lookups);
+            println!("  cost:    {:.2}", diag.trigram_cost);
+            println!("  hashes:  {:?}", diag.selected.decomposition.required);
+            println!();
+
+            let sparse_gram_count = diag.selected.decomposition.sparse_required.len();
+            let sparse_grams_display: Vec<String> = diag
+                .selected
+                .decomposition
+                .sparse_required
+                .iter()
+                .map(|g| format!("hash={:#010x} len={}", g.hash, g.gram_len))
+                .collect();
+
+            match (diag.sparse_lookups, diag.sparse_cost) {
+                (Some(lookups), Some(cost)) => {
+                    println!("Sparse plan:");
+                    println!("  lookups: {}", lookups);
+                    println!("  cost:    {:.2}", cost);
+                    println!("  grams:   {:?}", sparse_grams_display);
+                }
+                _ => {
+                    println!(
+                        "Sparse plan: unavailable ({} sparse grams >= {} trigrams, no reduction)",
+                        sparse_gram_count, diag.trigram_lookups,
+                    );
+                    if !sparse_grams_display.is_empty() {
+                        println!("  grams:   {:?}", sparse_grams_display);
+                    }
+                }
+            }
+            println!();
+
+            println!("Selected:  {}", diag.selected.strategy);
+            println!("Lookups:   {}", diag.selected.lookup_count);
+            println!("Cost:      {:.2}", diag.selected.estimated_cost);
         }
         Commands::Bench { action } => match action {
             BenchAction::Report {
@@ -177,6 +284,27 @@ fn main() {
                 criterion_dir,
             } => {
                 qndx_bench::report::generate_report(&criterion_dir, &format);
+            }
+            BenchAction::CheckBudgets {
+                comparison,
+                budgets,
+                fail_on_critical,
+            } => {
+                match qndx_bench::report::check_performance_budgets(
+                    comparison.as_deref(),
+                    &budgets,
+                    fail_on_critical,
+                ) {
+                    Ok(passed) => {
+                        if !passed {
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("error checking budgets: {}", e);
+                        std::process::exit(1);
+                    }
+                }
             }
         },
     }
@@ -189,8 +317,17 @@ fn run_index_search(
     files_only: bool,
     show_stats: bool,
     start: Instant,
+    strategy: StrategyOverride,
 ) {
-    match qndx_query::index_search(root, index_dir, pattern) {
+    let reader = match qndx_index::IndexReader::open(index_dir) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error opening index: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    match qndx_query::index_search_with_strategy(&reader, root, pattern, strategy) {
         Ok(result) => {
             if files_only {
                 let mut seen = std::collections::BTreeSet::new();
@@ -202,10 +339,11 @@ fn run_index_search(
                 if show_stats {
                     let elapsed = start.elapsed();
                     eprintln!(
-                        "{} matching files (from {} candidates / {} total) in {:.3}s [indexed]",
+                        "{} matching files (from {} candidates / {} total, strategy: {}) in {:.3}s [indexed]",
                         result.stats.verified_count,
                         result.stats.candidate_count,
                         result.stats.total_files,
+                        result.stats.strategy,
                         elapsed.as_secs_f64(),
                     );
                 }
@@ -216,13 +354,14 @@ fn run_index_search(
                 if show_stats {
                     let elapsed = start.elapsed();
                     eprintln!(
-                        "{} matches in {} files ({} bytes, {} candidates / {} total, {} lookups) in {:.3}s [indexed]",
+                        "{} matches in {} files ({} bytes, {} candidates / {} total, {} lookups, strategy: {}) in {:.3}s [indexed]",
                         result.results.matches.len(),
                         result.results.files_scanned,
                         result.results.bytes_scanned,
                         result.stats.candidate_count,
                         result.stats.total_files,
                         result.stats.lookup_count,
+                        result.stats.strategy,
                         elapsed.as_secs_f64(),
                     );
                 }

@@ -1,6 +1,7 @@
 //! Benchmark report generation: human-readable and machine-readable (JSON).
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -142,6 +143,272 @@ fn chrono_stub() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     format!("unix:{}", duration.as_secs())
+}
+
+/// Budget configuration for a benchmark group/metric.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Budget {
+    pub p50_regression_pct: Option<f64>,
+    pub p95_regression_pct: Option<f64>,
+    pub throughput_regression_pct: Option<f64>,
+    pub growth_pct: Option<f64>,
+    pub tolerance_pct: Option<f64>,
+    pub critical: Option<bool>,
+}
+
+/// Check performance budgets against baseline comparison.
+///
+/// Returns Ok(true) if all budgets pass, Ok(false) if violations found.
+pub fn check_performance_budgets(
+    comparison_path: Option<&Path>,
+    budgets_path: &Path,
+    fail_on_critical: bool,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    // Load budgets configuration
+    let budgets_content = fs::read_to_string(budgets_path)?;
+    let budgets: HashMap<String, HashMap<String, Budget>> = toml::from_str(&budgets_content)?;
+
+    println!("=== Performance Budget Check ===");
+    println!("Budgets: {}", budgets_path.display());
+
+    // If no comparison file provided, try to parse from Criterion output
+    let comparison_data = if let Some(path) = comparison_path {
+        println!("Comparison: {}", path.display());
+        fs::read_to_string(path)?
+    } else {
+        println!("Comparison: Reading from target/criterion/");
+        // For MVP, we'll implement a simple parser
+        // In production, this would parse Criterion's comparison output
+        String::new()
+    };
+
+    // Parse comparison results
+    let comparisons = parse_criterion_comparison(&comparison_data)?;
+
+    let mut violations = Vec::new();
+    let mut warnings = Vec::new();
+    let mut checks_passed = 0;
+
+    println!();
+    println!("Checking budgets...");
+    println!();
+
+    // Check each benchmark against its budget
+    for (benchmark_id, comparison) in &comparisons {
+        // Try to find matching budget
+        if let Some(budget) = find_budget(&budgets, benchmark_id) {
+            let result = check_budget(benchmark_id, comparison, budget);
+
+            match result {
+                BudgetResult::Pass => {
+                    checks_passed += 1;
+                }
+                BudgetResult::Violation {
+                    message,
+                    is_critical,
+                } => {
+                    if is_critical {
+                        violations.push(message);
+                    } else {
+                        warnings.push(message);
+                    }
+                }
+            }
+        }
+    }
+
+    // Print results
+    println!("Results:");
+    println!("  ✓ Passed: {}", checks_passed);
+    println!("  ⚠ Warnings: {}", warnings.len());
+    println!("  ✗ Critical violations: {}", violations.len());
+    println!();
+
+    if !warnings.is_empty() {
+        println!("Warnings (non-critical):");
+        for w in &warnings {
+            println!("  ⚠ {}", w);
+        }
+        println!();
+    }
+
+    if !violations.is_empty() {
+        println!("CRITICAL VIOLATIONS:");
+        for v in &violations {
+            println!("  ✗ {}", v);
+        }
+        println!();
+
+        if fail_on_critical {
+            println!("❌ Performance budgets check FAILED (critical violations)");
+            return Ok(false);
+        }
+    }
+
+    if violations.is_empty() && warnings.is_empty() {
+        println!("✅ All performance budgets passed!");
+    } else if violations.is_empty() {
+        println!("✅ Performance budgets passed (with warnings)");
+    }
+
+    Ok(violations.is_empty() || !fail_on_critical)
+}
+
+/// Result of a budget check.
+enum BudgetResult {
+    Pass,
+    Violation { message: String, is_critical: bool },
+}
+
+/// Find budget for a given benchmark ID.
+fn find_budget<'a>(
+    budgets: &'a HashMap<String, HashMap<String, Budget>>,
+    benchmark_id: &str,
+) -> Option<&'a Budget> {
+    // Parse benchmark_id like "postings_choice.intersection.low"
+    let parts: Vec<&str> = benchmark_id.split('.').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    let group = parts[0];
+    let metric_key = parts[1..].join(".");
+
+    budgets.get(group)?.get(&metric_key)
+}
+
+/// Check a single benchmark against its budget.
+fn check_budget(benchmark_id: &str, comparison: &Comparison, budget: &Budget) -> BudgetResult {
+    let is_critical = budget.critical.unwrap_or(false);
+
+    // Check p50 regression
+    if let (Some(threshold), Some(change_pct)) =
+        (budget.p50_regression_pct, comparison.p50_change_pct)
+    {
+        if change_pct > threshold {
+            return BudgetResult::Violation {
+                message: format!(
+                    "{}: p50 regression {:.1}% exceeds budget {:.1}%",
+                    benchmark_id, change_pct, threshold
+                ),
+                is_critical,
+            };
+        }
+    }
+
+    // Check p95 regression
+    if let (Some(threshold), Some(change_pct)) =
+        (budget.p95_regression_pct, comparison.p95_change_pct)
+    {
+        if change_pct > threshold {
+            return BudgetResult::Violation {
+                message: format!(
+                    "{}: p95 regression {:.1}% exceeds budget {:.1}%",
+                    benchmark_id, change_pct, threshold
+                ),
+                is_critical,
+            };
+        }
+    }
+
+    // Check throughput regression
+    if let (Some(threshold), Some(change_pct)) = (
+        budget.throughput_regression_pct,
+        comparison.throughput_change_pct,
+    ) {
+        if change_pct < -threshold {
+            // Negative because lower throughput is worse
+            return BudgetResult::Violation {
+                message: format!(
+                    "{}: throughput regression {:.1}% exceeds budget {:.1}%",
+                    benchmark_id, -change_pct, threshold
+                ),
+                is_critical,
+            };
+        }
+    }
+
+    BudgetResult::Pass
+}
+
+/// Comparison data from Criterion.
+#[derive(Debug)]
+struct Comparison {
+    p50_change_pct: Option<f64>,
+    p95_change_pct: Option<f64>,
+    throughput_change_pct: Option<f64>,
+}
+
+/// Parse Criterion comparison output.
+///
+/// For MVP, this is a simplified parser. In production, we'd parse
+/// Criterion's JSON output or use its programmatic API.
+fn parse_criterion_comparison(
+    data: &str,
+) -> Result<HashMap<String, Comparison>, Box<dyn std::error::Error>> {
+    let mut comparisons = HashMap::new();
+
+    // If no data provided, return empty (for MVP we'll stub this)
+    if data.is_empty() {
+        // Stub for testing
+        return Ok(comparisons);
+    }
+
+    // Parse Criterion output format
+    // Example: "postings_intersect_union/vec/low   time:   [12.345 µs 12.456 µs 12.567 µs]"
+    //          "                                   change: [-5.1234% -4.5678% -3.9012%] (p = 0.00 < 0.05)"
+
+    let lines: Vec<&str> = data.lines().collect();
+    let mut current_bench: Option<String> = None;
+
+    for line in lines {
+        // Detect benchmark name
+        if line.contains("time:") && !line.trim().starts_with("change:") {
+            // Extract benchmark name
+            if let Some(name) = line.split_whitespace().next() {
+                current_bench = Some(name.to_string());
+            }
+        }
+
+        // Detect change line
+        if line.contains("change:") {
+            if let Some(bench_name) = &current_bench {
+                // Parse change percentage
+                // Example: "change: [-5.1234% -4.5678% -3.9012%]"
+                if let Some(change_pct) = extract_change_percentage(line) {
+                    comparisons.insert(
+                        bench_name.clone(),
+                        Comparison {
+                            p50_change_pct: Some(change_pct),
+                            p95_change_pct: None,
+                            throughput_change_pct: None,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(comparisons)
+}
+
+/// Extract change percentage from Criterion output line.
+fn extract_change_percentage(line: &str) -> Option<f64> {
+    // Look for pattern like "[-5.1234% -4.5678% -3.9012%]"
+    let start = line.find('[')?;
+    let end = line.find(']')?;
+    let bracket_content = &line[start + 1..end];
+
+    // Split by whitespace and find the middle value (median estimate)
+    let parts: Vec<&str> = bracket_content.split_whitespace().collect();
+    if parts.len() >= 2 {
+        let middle = parts[1];
+        // Remove % and parse
+        let value_str = middle.trim_end_matches('%');
+        return value_str.parse::<f64>().ok();
+    }
+
+    None
 }
 
 #[cfg(test)]

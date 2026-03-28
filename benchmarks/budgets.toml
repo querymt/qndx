@@ -1,0 +1,201 @@
+# Performance Budgets Configuration
+#
+# This file defines machine-readable performance budgets for automated
+# regression detection in CI. Each section corresponds to a benchmark
+# group and metric, with percentage thresholds for acceptable regression.
+#
+# Format:
+#   [benchmark_group.metric.variant]
+#   p50_regression_pct = <threshold>
+#   p95_regression_pct = <threshold>
+#   critical = true/false  (if true, fails CI on violation)
+
+# ============================================================================
+# Postings Choice Benchmarks
+# ============================================================================
+
+[postings_choice.intersection.low]
+p50_regression_pct = 15.0
+p95_regression_pct = 15.0
+critical = true
+
+[postings_choice.intersection.medium]
+p50_regression_pct = 15.0
+p95_regression_pct = 15.0
+critical = true
+
+[postings_choice.intersection.high]
+p50_regression_pct = 15.0
+p95_regression_pct = 15.0
+critical = true
+
+[postings_choice.union.low]
+p50_regression_pct = 20.0
+p95_regression_pct = 20.0
+critical = false
+
+[postings_choice.union.medium]
+p50_regression_pct = 20.0
+p95_regression_pct = 20.0
+critical = false
+
+[postings_choice.union.high]
+p50_regression_pct = 20.0
+p95_regression_pct = 20.0
+critical = false
+
+[postings_choice.encode]
+throughput_regression_pct = 25.0
+critical = false
+
+[postings_choice.decode]
+throughput_regression_pct = 20.0
+critical = false
+
+[postings_choice.size]
+growth_pct = 15.0
+critical = false
+
+# ============================================================================
+# N-gram Extraction Benchmarks
+# ============================================================================
+
+[ngram_extract.throughput]
+regression_pct = 20.0
+critical = false
+
+[ngram_extract.index_size]
+growth_pct = 25.0
+critical = true
+
+[ngram_extract.gram_count]
+growth_pct = 30.0
+critical = false
+
+# ============================================================================
+# Query Planner Benchmarks
+# ============================================================================
+
+[query_planner.planning_time]
+p50_regression_pct = 10.0
+p95_regression_pct = 15.0
+critical = true
+
+[query_planner.postings_lookups]
+growth_pct = 20.0
+critical = true
+
+[query_planner.candidate_size]
+growth_pct = 30.0
+critical = false
+
+# ============================================================================
+# End-to-End Search Benchmarks (MOST CRITICAL)
+# ============================================================================
+
+[end_to_end_search.literal]
+p50_regression_pct = 10.0
+p95_regression_pct = 12.0
+critical = true
+description = "Simple substring search queries"
+
+[end_to_end_search.regex]
+p50_regression_pct = 10.0
+p95_regression_pct = 15.0
+critical = true
+description = "Pattern matching queries"
+
+[end_to_end_search.complex]
+p50_regression_pct = 12.0
+p95_regression_pct = 18.0
+critical = true
+description = "Multi-term and nested pattern queries"
+
+[end_to_end_search.candidates]
+growth_pct = 30.0
+critical = false
+description = "Candidate count before verification"
+
+[end_to_end_search.verify_share]
+growth_pct = 25.0
+critical = false
+description = "Percentage of time spent in verification stage"
+
+[end_to_end_search.correctness]
+tolerance_pct = 0.0
+critical = true
+description = "Match counts must be exact (no false negatives/positives)"
+
+# ============================================================================
+# Git Overlay Benchmarks
+# ============================================================================
+
+[git_overlay.dirty_detection]
+p50_regression_pct = 15.0
+p95_regression_pct = 20.0
+critical = true
+
+[git_overlay.overlay_update]
+throughput_regression_pct = 20.0
+critical = false
+
+[git_overlay.overlay_merge]
+p50_regression_pct = 10.0
+p95_regression_pct = 15.0
+critical = true
+
+# ============================================================================
+# Serializer Choice Benchmarks (Informational)
+# ============================================================================
+
+[serializer_choice.encode]
+regression_pct = 20.0
+critical = false
+
+[serializer_choice.decode]
+regression_pct = 20.0
+critical = false
+
+[serializer_choice.size]
+growth_pct = 15.0
+critical = false
+
+# ============================================================================
+# Index Build Metrics
+# ============================================================================
+
+[index_build.throughput]
+regression_pct = 20.0
+critical = false
+description = "Overall MB/s during index construction"
+
+[index_build.total_size]
+growth_pct = 25.0
+critical = true
+description = "Total index size as percentage of corpus"
+
+[index_build.ngram_count]
+growth_pct = 25.0
+critical = true
+description = "Total n-grams stored in index"
+
+# ============================================================================
+# CI Enforcement Configuration
+# ============================================================================
+
+[ci]
+# Fail CI if any critical budget is violated
+fail_on_critical = true
+
+# Warn (but don't fail) if non-critical budgets are violated
+warn_on_noncritical = true
+
+# Number of times to retry benchmark if initial run shows regression
+# (helps avoid false positives from CI noise)
+retry_on_regression = 2
+
+# Minimum sample size for statistical significance
+min_samples = 50
+
+# Warmup iterations before measurement
+warmup_iterations = 10
