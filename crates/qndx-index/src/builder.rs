@@ -163,15 +163,136 @@ pub fn build_index(
 
 /// Build a trigram index by walking a directory.
 ///
-/// Discovers files using `WalkConfig`, reads them, and builds the index.
+/// Discovers files using `WalkConfig` and processes them one at a time,
+/// avoiding loading the entire corpus into memory. Only the inverted index
+/// (n-gram → file IDs) is held in memory during the build.
+///
+/// For a 1 GB corpus this reduces peak memory from ~1 GB (all file content)
+/// + inverted index to just the inverted index + O(largest_file).
 pub fn build_index_from_dir(
     root: &Path,
     index_dir: &Path,
     config: &qndx_core::walk::WalkConfig,
     base_commit: Option<String>,
 ) -> Result<BuildResult, format::FormatError> {
-    let files = qndx_core::walk::discover_and_read_files(root, config);
-    build_index(&files, index_dir, base_commit)
+    fs::create_dir_all(index_dir)?;
+
+    let discovered = qndx_core::walk::discover_files(root, config);
+
+    // Step 1: Build inverted index by streaming files one at a time
+    let mut inverted: BTreeMap<NgramHash, Vec<FileId>> = BTreeMap::new();
+    let mut sparse_hashes: std::collections::HashSet<NgramHash> = std::collections::HashSet::new();
+    let mut source_bytes: u64 = 0;
+    let mut file_paths: Vec<String> = Vec::with_capacity(discovered.len());
+
+    for file in &discovered {
+        let content = match std::fs::read(&file.abs_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let fid = file_paths.len() as FileId;
+        file_paths.push(file.rel_path.clone());
+        source_bytes += content.len() as u64;
+
+        // Extract trigrams
+        let trigrams = extract_trigrams(&content);
+        for hash in trigrams {
+            inverted.entry(hash).or_default().push(fid);
+        }
+
+        // Extract sparse n-grams
+        let sparse = extract_sparse_ngrams(&content);
+        for (hash, _len) in sparse {
+            sparse_hashes.insert(hash);
+            inverted.entry(hash).or_default().push(fid);
+        }
+        // `content` is dropped here — only one file in memory at a time
+    }
+
+    // Deduplicate postings
+    for posting in inverted.values_mut() {
+        posting.sort_unstable();
+        posting.dedup();
+    }
+
+    // Step 2–6: Serialize and write (same as build_index)
+    let mut postings_payload = Vec::new();
+    let mut ngram_entries: Vec<NgramEntry> = Vec::with_capacity(inverted.len());
+    let mut trigram_count: u32 = 0;
+    let mut sparse_count: u32 = 0;
+
+    for (&hash, ids) in &inverted {
+        let posting = PostingList::from_vec_with_threshold(ids.clone(), DEFAULT_HYBRID_THRESHOLD);
+        let encoded = posting.encode_auto();
+        let offset = postings_payload.len() as u64;
+        let len = encoded.len() as u32;
+        postings_payload.extend_from_slice(&encoded);
+
+        let flags = if sparse_hashes.contains(&hash) {
+            sparse_count += 1;
+            FLAG_SPARSE
+        } else {
+            trigram_count += 1;
+            0
+        };
+
+        ngram_entries.push(NgramEntry {
+            hash,
+            offset,
+            len,
+            flags,
+        });
+    }
+
+    // Drop the inverted index — no longer needed
+    drop(inverted);
+    drop(sparse_hashes);
+
+    let mut ngrams_payload = Vec::with_capacity(ngram_entries.len() * NGRAM_ENTRY_SIZE);
+    for entry in &ngram_entries {
+        ngrams_payload.extend_from_slice(&serialize_ngram_entry(entry));
+    }
+
+    {
+        let file = fs::File::create(index_dir.join("ngrams.tbl"))?;
+        let mut writer = std::io::BufWriter::new(file);
+        format::write_with_header(&mut writer, MAGIC_NGRAMS, &ngrams_payload)?;
+    }
+
+    {
+        let file = fs::File::create(index_dir.join("postings.dat"))?;
+        let mut writer = std::io::BufWriter::new(file);
+        format::write_with_header(&mut writer, MAGIC_POSTINGS, &postings_payload)?;
+    }
+
+    let file_count = file_paths.len() as u32;
+    let manifest = Manifest {
+        version: qndx_core::format::FORMAT_VERSION,
+        file_count,
+        ngram_count: ngram_entries.len() as u32,
+        postings_bytes: postings_payload.len() as u64,
+        base_commit,
+        files: file_paths,
+    };
+
+    let manifest_bytes =
+        postcard::to_allocvec(&manifest).map_err(|e| std::io::Error::other(e.to_string()))?;
+
+    {
+        let file = fs::File::create(index_dir.join("manifest.bin"))?;
+        let mut writer = std::io::BufWriter::new(file);
+        format::write_with_header(&mut writer, MAGIC_MANIFEST, &manifest_bytes)?;
+    }
+
+    Ok(BuildResult {
+        file_count,
+        ngram_count: ngram_entries.len() as u32,
+        trigram_count,
+        sparse_count,
+        postings_bytes: postings_payload.len() as u64,
+        source_bytes,
+    })
 }
 
 #[cfg(test)]

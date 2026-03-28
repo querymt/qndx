@@ -46,6 +46,9 @@ regex-syntax = "0.8"
 # File discovery (gitignore-aware walking)
 ignore = "0.4"
 
+# Memory-mapped I/O
+memmap2 = "0.9"
+
 # Hashing
 crc32fast = "1"
 

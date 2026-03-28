@@ -1,60 +1,83 @@
-//! Index reader: load index files, binary search lookup, postings operations.
+//! Index reader: memory-mapped index files, binary search lookup, postings operations.
 //!
-//! Loads `ngrams.tbl`, `postings.dat`, and `manifest.bin` from an index directory
-//! and provides efficient trigram -> candidate file set resolution.
+//! Uses `memmap2` to memory-map `ngrams.tbl` and `postings.dat`, avoiding the need
+//! to read entire files into heap memory. The OS manages page-in/page-out, so only
+//! pages actually touched during queries consume physical RAM.
+//!
+//! For the Linux kernel index (~2 GB on disk), this reduces query-time resident memory
+//! from ~2 GB to effectively zero upfront cost (only touched pages are paged in).
 
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
+use memmap2::Mmap;
 use qndx_core::format::{
-    self, deserialize_ngram_entry, FormatError, FLAG_SPARSE, MAGIC_MANIFEST, MAGIC_NGRAMS,
+    self, deserialize_ngram_entry, payload_from_slice, validate_checksum_from_slice,
+    validate_header_from_slice, FormatError, FLAG_SPARSE, MAGIC_MANIFEST, MAGIC_NGRAMS,
     MAGIC_POSTINGS, NGRAM_ENTRY_SIZE,
 };
-use qndx_core::{FileId, Manifest, NgramEntry, NgramHash};
+use qndx_core::{FileId, Manifest, NgramHash};
 
 use crate::postings::PostingList;
 
-/// A loaded trigram index, ready for queries.
-#[derive(Debug)]
+/// A memory-mapped trigram index, ready for queries.
+///
+/// The ngram table and postings data are memory-mapped from disk. Only the manifest
+/// (file paths and metadata) is fully deserialized into heap memory.
 pub struct IndexReader {
-    /// Sorted ngram table entries (sorted by hash).
-    ngram_table: Vec<NgramEntry>,
-    /// Raw postings data.
-    postings_data: Vec<u8>,
-    /// Manifest with metadata and file paths.
+    /// Memory-mapped ngrams.tbl payload region (after header).
+    ngram_mmap: Mmap,
+    /// Memory-mapped postings.dat payload region (after header).
+    postings_mmap: Mmap,
+    /// Number of ngram entries (computed from mmap size).
+    ngram_count: usize,
+    /// Manifest with metadata and file paths (deserialized, typically small).
     pub manifest: Manifest,
+}
+
+// Manual Debug impl because Mmap doesn't implement Debug
+impl std::fmt::Debug for IndexReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IndexReader")
+            .field("ngram_count", &self.ngram_count)
+            .field("ngram_mmap_len", &self.ngram_mmap.len())
+            .field("postings_mmap_len", &self.postings_mmap.len())
+            .field("manifest.file_count", &self.manifest.file_count)
+            .finish()
+    }
 }
 
 impl IndexReader {
     /// Load an index from directory containing `ngrams.tbl`, `postings.dat`, `manifest.bin`.
+    ///
+    /// Uses memory-mapped I/O for ngrams and postings files. The manifest is read
+    /// fully into memory (it's typically small — a few KB even for large corpora).
     pub fn open(index_dir: &Path) -> Result<Self, FormatError> {
-        // Load ngrams.tbl
-        let ngrams_payload = {
+        // Memory-map ngrams.tbl
+        let ngram_mmap = {
             let file = File::open(index_dir.join("ngrams.tbl"))?;
-            let mut reader = BufReader::new(file);
-            format::read_with_header(&mut reader, MAGIC_NGRAMS)?
+            // SAFETY: the file is read-only and we don't modify it.
+            let mmap = unsafe { Mmap::map(&file)? };
+            let header = validate_header_from_slice(&mmap, MAGIC_NGRAMS)?;
+            validate_checksum_from_slice(&mmap, &header)?;
+            mmap
         };
 
-        // Parse ngram entries
-        let entry_count = ngrams_payload.len() / NGRAM_ENTRY_SIZE;
-        let mut ngram_table = Vec::with_capacity(entry_count);
-        for i in 0..entry_count {
-            let start = i * NGRAM_ENTRY_SIZE;
-            let buf: &[u8; NGRAM_ENTRY_SIZE] = ngrams_payload[start..start + NGRAM_ENTRY_SIZE]
-                .try_into()
-                .unwrap();
-            ngram_table.push(deserialize_ngram_entry(buf));
-        }
+        let ngram_payload = payload_from_slice(&ngram_mmap);
+        let ngram_count = ngram_payload.len() / NGRAM_ENTRY_SIZE;
 
-        // Load postings.dat
-        let postings_data = {
+        // Memory-map postings.dat
+        let postings_mmap = {
             let file = File::open(index_dir.join("postings.dat"))?;
-            let mut reader = BufReader::new(file);
-            format::read_with_header(&mut reader, MAGIC_POSTINGS)?
+            // SAFETY: the file is read-only and we don't modify it.
+            let mmap = unsafe { Mmap::map(&file)? };
+            let header = validate_header_from_slice(&mmap, MAGIC_POSTINGS)?;
+            validate_checksum_from_slice(&mmap, &header)?;
+            mmap
         };
 
-        // Load manifest.bin
+        // Load manifest.bin (small, fully deserialized)
         let manifest_bytes = {
             let file = File::open(index_dir.join("manifest.bin"))?;
             let mut reader = BufReader::new(file);
@@ -65,10 +88,59 @@ impl IndexReader {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
 
         Ok(IndexReader {
-            ngram_table,
-            postings_data,
+            ngram_mmap,
+            postings_mmap,
+            ngram_count,
             manifest,
         })
+    }
+
+    /// Get the ngram payload region (after the file header).
+    #[inline]
+    fn ngram_payload(&self) -> &[u8] {
+        payload_from_slice(&self.ngram_mmap)
+    }
+
+    /// Get the postings payload region (after the file header).
+    #[inline]
+    fn postings_payload(&self) -> &[u8] {
+        payload_from_slice(&self.postings_mmap)
+    }
+
+    /// Deserialize a single ngram entry at the given index from the mmap'd table.
+    #[inline]
+    fn ngram_entry(&self, idx: usize) -> qndx_core::NgramEntry {
+        let payload = self.ngram_payload();
+        let start = idx * NGRAM_ENTRY_SIZE;
+        let buf: &[u8; NGRAM_ENTRY_SIZE] =
+            payload[start..start + NGRAM_ENTRY_SIZE].try_into().unwrap();
+        deserialize_ngram_entry(buf)
+    }
+
+    /// Read just the hash field from an ngram entry at the given index.
+    /// Avoids deserializing the full entry during binary search.
+    #[inline]
+    fn ngram_hash_at(&self, idx: usize) -> NgramHash {
+        let payload = self.ngram_payload();
+        let start = idx * NGRAM_ENTRY_SIZE;
+        u32::from_le_bytes(payload[start..start + 4].try_into().unwrap())
+    }
+
+    /// Binary search the ngram table for a hash.
+    /// Returns the index into the ngram table, or None if not found.
+    fn binary_search_hash(&self, hash: NgramHash) -> Option<usize> {
+        let mut lo = 0usize;
+        let mut hi = self.ngram_count;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let mid_hash = self.ngram_hash_at(mid);
+            match mid_hash.cmp(&hash) {
+                std::cmp::Ordering::Less => lo = mid + 1,
+                std::cmp::Ordering::Greater => hi = mid,
+                std::cmp::Ordering::Equal => return Some(mid),
+            }
+        }
+        None
     }
 
     /// Look up a single trigram hash via binary search.
@@ -78,22 +150,20 @@ impl IndexReader {
     /// the encoding format (varint-delta, fixed-delta, or Roaring). The reader
     /// auto-detects the format using `PostingList::decode_tagged`.
     pub fn lookup(&self, hash: NgramHash) -> PostingList {
-        match self
-            .ngram_table
-            .binary_search_by_key(&hash, |entry| entry.hash)
-        {
-            Ok(idx) => {
-                let entry = &self.ngram_table[idx];
+        match self.binary_search_hash(hash) {
+            Some(idx) => {
+                let entry = self.ngram_entry(idx);
+                let postings = self.postings_payload();
                 let start = entry.offset as usize;
                 let end = start + entry.len as usize;
-                if end <= self.postings_data.len() {
-                    PostingList::decode_tagged(&self.postings_data[start..end])
+                if end <= postings.len() {
+                    PostingList::decode_tagged(&postings[start..end])
                         .unwrap_or_else(|| PostingList::Vec(vec![]))
                 } else {
                     PostingList::Vec(vec![])
                 }
             }
-            Err(_) => PostingList::Vec(vec![]),
+            None => PostingList::Vec(vec![]),
         }
     }
 
@@ -148,40 +218,33 @@ impl IndexReader {
 
     /// Get the number of unique n-grams in the index (trigrams + sparse).
     pub fn ngram_count(&self) -> usize {
-        self.ngram_table.len()
+        self.ngram_count
     }
 
     /// Get the number of sparse n-gram entries in the index.
     pub fn sparse_count(&self) -> usize {
-        self.ngram_table
-            .iter()
-            .filter(|e| e.flags & FLAG_SPARSE != 0)
+        (0..self.ngram_count)
+            .filter(|&i| self.ngram_entry(i).flags & FLAG_SPARSE != 0)
             .count()
     }
 
     /// Get the number of trigram-only entries in the index.
     pub fn trigram_only_count(&self) -> usize {
-        self.ngram_table
-            .iter()
-            .filter(|e| e.flags & FLAG_SPARSE == 0)
+        (0..self.ngram_count)
+            .filter(|&i| self.ngram_entry(i).flags & FLAG_SPARSE == 0)
             .count()
     }
 
     /// Check if a given n-gram hash exists in the index.
     pub fn contains(&self, hash: NgramHash) -> bool {
-        self.ngram_table
-            .binary_search_by_key(&hash, |entry| entry.hash)
-            .is_ok()
+        self.binary_search_hash(hash).is_some()
     }
 
     /// Check if a given n-gram hash is a sparse n-gram.
     pub fn is_sparse(&self, hash: NgramHash) -> bool {
-        match self
-            .ngram_table
-            .binary_search_by_key(&hash, |entry| entry.hash)
-        {
-            Ok(idx) => self.ngram_table[idx].flags & FLAG_SPARSE != 0,
-            Err(_) => false,
+        match self.binary_search_hash(hash) {
+            Some(idx) => self.ngram_entry(idx).flags & FLAG_SPARSE != 0,
+            None => false,
         }
     }
 

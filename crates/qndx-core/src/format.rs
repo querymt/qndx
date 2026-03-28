@@ -131,6 +131,79 @@ fn write_header<W: Write>(writer: &mut W, header: &FileHeader) -> Result<(), For
     Ok(())
 }
 
+/// Validate a file header from a byte slice (for use with mmap).
+///
+/// Checks magic bytes, version, and payload length against the file size.
+/// Returns the validated header. Does NOT check the CRC (call
+/// `validate_checksum_from_slice` separately if needed).
+pub fn validate_header_from_slice(
+    data: &[u8],
+    expected_magic: [u8; 4],
+) -> Result<FileHeader, FormatError> {
+    if data.len() < HEADER_SIZE {
+        return Err(FormatError::Io(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "file too small for header",
+        )));
+    }
+
+    let mut magic = [0u8; 4];
+    magic.copy_from_slice(&data[0..4]);
+    if magic != expected_magic {
+        return Err(FormatError::BadMagic {
+            expected: expected_magic,
+            found: magic,
+        });
+    }
+
+    let version = u32::from_le_bytes(data[4..8].try_into().unwrap());
+    if version > FORMAT_VERSION {
+        return Err(FormatError::UnsupportedVersion {
+            found: version,
+            max_supported: FORMAT_VERSION,
+        });
+    }
+
+    let payload_len = u64::from_le_bytes(data[8..16].try_into().unwrap());
+    let checksum = u32::from_le_bytes(data[16..20].try_into().unwrap());
+
+    let actual_payload_len = data.len() as u64 - HEADER_SIZE as u64;
+    if payload_len != actual_payload_len {
+        return Err(FormatError::PayloadLengthMismatch {
+            expected: payload_len,
+            actual: actual_payload_len,
+        });
+    }
+
+    Ok(FileHeader {
+        magic,
+        version,
+        payload_len,
+        checksum,
+    })
+}
+
+/// Validate the CRC32 checksum of the payload region in a byte slice.
+///
+/// `data` should be the full file contents (header + payload).
+/// This is an O(n) operation over the entire payload.
+pub fn validate_checksum_from_slice(data: &[u8], header: &FileHeader) -> Result<(), FormatError> {
+    let payload = &data[HEADER_SIZE..];
+    let computed = compute_checksum(payload);
+    if computed != header.checksum {
+        return Err(FormatError::ChecksumMismatch {
+            expected: header.checksum,
+            computed,
+        });
+    }
+    Ok(())
+}
+
+/// Get the payload region from a validated file slice (skips header).
+pub fn payload_from_slice(data: &[u8]) -> &[u8] {
+    &data[HEADER_SIZE..]
+}
+
 /// Read and validate a file header + payload from a reader.
 /// Returns the validated payload bytes.
 pub fn read_with_header<R: Read>(
