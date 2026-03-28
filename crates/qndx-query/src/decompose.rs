@@ -127,6 +127,20 @@ pub fn sparse_covering(sparse: &[SparseGram], trigram_count: usize) -> Option<Ve
     }
 }
 
+/// Extract literal segments from a pattern for diagnostic display.
+///
+/// This is a public wrapper around `extract_literals` for use by the planner
+/// diagnostics. For patterns with alternation, literals from all branches are
+/// returned.
+pub fn extract_literals_for_diagnostics(pattern: &str) -> Vec<String> {
+    let branches = split_top_level_alternation(pattern);
+    let mut all_literals = Vec::new();
+    for branch in &branches {
+        all_literals.extend(extract_literals(branch));
+    }
+    all_literals
+}
+
 /// Split a pattern on top-level `|` (not inside groups/brackets).
 fn split_top_level_alternation(pattern: &str) -> Vec<String> {
     let mut branches = Vec::new();

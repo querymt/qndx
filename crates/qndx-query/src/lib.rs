@@ -7,9 +7,11 @@ pub mod verify;
 
 pub use decompose::{sparse_covering, Decomposition, SparseGram};
 pub use planner::{
-    FrequencySelectivity, HashSelectivity, PlanStrategy, QueryPlan, SelectivityEstimator,
+    plan_diagnostics, plan_diagnostics_with_strategy, plan_query_with_strategy,
+    FrequencySelectivity, HashSelectivity, PlanDiagnostics, PlanStrategy, QueryPlan,
+    SelectivityEstimator, StrategyOverride,
 };
 pub use search::{
     index_search, index_search_matching_files, index_search_with_overlay, index_search_with_reader,
-    IndexSearchResults, IndexSearchStats,
+    index_search_with_strategy, IndexSearchResults, IndexSearchStats,
 };

@@ -23,6 +23,26 @@ pub enum PlanStrategy {
     Sparse,
 }
 
+impl std::fmt::Display for PlanStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PlanStrategy::Trigram => write!(f, "trigram"),
+            PlanStrategy::Sparse => write!(f, "sparse"),
+        }
+    }
+}
+
+/// Explicit strategy override for testing and diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrategyOverride {
+    /// Let the planner pick the best strategy (default).
+    Auto,
+    /// Force trigram strategy.
+    ForceTrigram,
+    /// Force sparse strategy (falls back to trigram if sparse covering is unavailable).
+    ForceSparse,
+}
+
 /// Plan summary for benchmarking and diagnostics.
 #[derive(Debug, Clone)]
 pub struct QueryPlan {
@@ -93,11 +113,25 @@ impl SelectivityEstimator for FrequencySelectivity {
 
 /// Create a query plan from a regex pattern using the default hash-based selectivity.
 pub fn plan_query(pattern: &str) -> QueryPlan {
-    plan_query_with_estimator(pattern, &HashSelectivity)
+    plan_query_full(pattern, &HashSelectivity, StrategyOverride::Auto)
+}
+
+/// Create a query plan with an explicit strategy override.
+pub fn plan_query_with_strategy(pattern: &str, strategy: StrategyOverride) -> QueryPlan {
+    plan_query_full(pattern, &HashSelectivity, strategy)
 }
 
 /// Create a query plan using a custom selectivity estimator.
 pub fn plan_query_with_estimator(pattern: &str, estimator: &dyn SelectivityEstimator) -> QueryPlan {
+    plan_query_full(pattern, estimator, StrategyOverride::Auto)
+}
+
+/// Full query planning with both estimator and strategy override.
+pub fn plan_query_full(
+    pattern: &str,
+    estimator: &dyn SelectivityEstimator,
+    strategy_override: StrategyOverride,
+) -> QueryPlan {
     let decomposition = decompose_pattern(pattern);
 
     // --- Build trigram plan ---
@@ -133,29 +167,128 @@ pub fn plan_query_with_estimator(pattern: &str, estimator: &dyn SelectivityEstim
         estimator,
     );
 
-    match sparse_plan {
-        Some((sparse_req, sparse_alts, sparse_cost, sparse_lookups))
-            if sparse_cost < trigram_cost =>
-        {
-            QueryPlan {
-                decomposition,
-                strategy: PlanStrategy::Sparse,
-                required_hashes: sparse_req,
-                alternative_hashes: sparse_alts,
-                lookup_count: sparse_lookups,
-                estimated_cost: sparse_cost,
-                estimated_candidates: 0,
+    let make_trigram_plan = |decomposition: Decomposition| QueryPlan {
+        decomposition,
+        strategy: PlanStrategy::Trigram,
+        required_hashes: trigram_required.clone(),
+        alternative_hashes: trigram_alternatives.clone(),
+        lookup_count: trigram_lookup_count,
+        estimated_cost: trigram_cost,
+        estimated_candidates: 0,
+    };
+
+    match strategy_override {
+        StrategyOverride::ForceTrigram => make_trigram_plan(decomposition),
+        StrategyOverride::ForceSparse => {
+            // Force sparse; fall back to trigram only if sparse covering is unavailable
+            match sparse_plan {
+                Some((sparse_req, sparse_alts, sparse_cost, sparse_lookups)) => QueryPlan {
+                    decomposition,
+                    strategy: PlanStrategy::Sparse,
+                    required_hashes: sparse_req,
+                    alternative_hashes: sparse_alts,
+                    lookup_count: sparse_lookups,
+                    estimated_cost: sparse_cost,
+                    estimated_candidates: 0,
+                },
+                None => make_trigram_plan(decomposition),
             }
         }
-        _ => QueryPlan {
-            decomposition,
-            strategy: PlanStrategy::Trigram,
-            required_hashes: trigram_required,
-            alternative_hashes: trigram_alternatives,
-            lookup_count: trigram_lookup_count,
-            estimated_cost: trigram_cost,
-            estimated_candidates: 0,
+        StrategyOverride::Auto => match sparse_plan {
+            Some((sparse_req, sparse_alts, sparse_cost, sparse_lookups))
+                if sparse_cost < trigram_cost =>
+            {
+                QueryPlan {
+                    decomposition,
+                    strategy: PlanStrategy::Sparse,
+                    required_hashes: sparse_req,
+                    alternative_hashes: sparse_alts,
+                    lookup_count: sparse_lookups,
+                    estimated_cost: sparse_cost,
+                    estimated_candidates: 0,
+                }
+            }
+            _ => make_trigram_plan(decomposition),
         },
+    }
+}
+
+/// Diagnostic details about both strategies for a pattern.
+#[derive(Debug, Clone)]
+pub struct PlanDiagnostics {
+    /// The plan that was (or would be) selected.
+    pub selected: QueryPlan,
+    /// Trigram strategy details.
+    pub trigram_lookups: usize,
+    pub trigram_cost: f64,
+    /// Sparse strategy details (None if sparse covering is unavailable).
+    pub sparse_lookups: Option<usize>,
+    pub sparse_cost: Option<f64>,
+    /// Literal segments extracted from the pattern.
+    pub literals: Vec<String>,
+}
+
+/// Produce full diagnostics for a pattern: both strategies, costs, and which wins.
+pub fn plan_diagnostics(pattern: &str) -> PlanDiagnostics {
+    plan_diagnostics_with_strategy(pattern, StrategyOverride::Auto)
+}
+
+/// Produce full diagnostics for a pattern with an explicit strategy override.
+pub fn plan_diagnostics_with_strategy(
+    pattern: &str,
+    strategy_override: StrategyOverride,
+) -> PlanDiagnostics {
+    let estimator = HashSelectivity;
+    let decomposition = decompose_pattern(pattern);
+
+    // Trigram plan
+    let trigram_required = &decomposition.required;
+    let trigram_alternatives = &decomposition.alternatives;
+    let trigram_lookups =
+        trigram_required.len() + trigram_alternatives.iter().map(|a| a.len()).sum::<usize>();
+    let trigram_cost: f64 = trigram_required
+        .iter()
+        .map(|&h| estimator.estimate(h, 3))
+        .sum::<f64>()
+        + trigram_alternatives
+            .iter()
+            .flat_map(|a| a.iter())
+            .map(|&h| estimator.estimate(h, 3))
+            .sum::<f64>();
+
+    // Sparse plan
+    let sparse_required_covering =
+        sparse_covering(&decomposition.sparse_required, trigram_required.len());
+    let sparse_alt_coverings: Vec<Option<Vec<SparseGram>>> = decomposition
+        .sparse_alternatives
+        .iter()
+        .zip(trigram_alternatives.iter())
+        .map(|(sp, tri)| sparse_covering(sp, tri.len()))
+        .collect();
+    let sparse_plan = build_sparse_plan(
+        &sparse_required_covering,
+        &sparse_alt_coverings,
+        trigram_required.is_empty(),
+        &estimator,
+    );
+
+    let (sparse_lookups, sparse_cost) = match &sparse_plan {
+        Some((_, _, cost, lookups)) => (Some(*lookups), Some(*cost)),
+        None => (None, None),
+    };
+
+    // Extract literals for display (re-run extraction)
+    let literals = crate::decompose::extract_literals_for_diagnostics(pattern);
+
+    let selected = plan_query_full(pattern, &estimator, strategy_override);
+
+    PlanDiagnostics {
+        selected,
+        trigram_lookups,
+        trigram_cost,
+        sparse_lookups,
+        sparse_cost,
+        literals,
     }
 }
 

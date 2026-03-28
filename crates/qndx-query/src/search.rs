@@ -11,7 +11,7 @@ use std::path::Path;
 use qndx_core::scan::{SearchMatch, SearchResults};
 use qndx_index::{IndexReader, OverlayIndex};
 
-use crate::planner::{plan_query, QueryPlan};
+use crate::planner::{plan_query, plan_query_with_strategy, QueryPlan, StrategyOverride};
 
 /// Statistics from an index-backed search.
 #[derive(Debug, Clone)]
@@ -67,10 +67,20 @@ pub fn index_search_with_reader(
     root: &Path,
     pattern: &str,
 ) -> Result<IndexSearchResults, String> {
+    index_search_with_strategy(reader, root, pattern, StrategyOverride::Auto)
+}
+
+/// Run an index-backed search with an explicit strategy override.
+pub fn index_search_with_strategy(
+    reader: &IndexReader,
+    root: &Path,
+    pattern: &str,
+    strategy: StrategyOverride,
+) -> Result<IndexSearchResults, String> {
     let re = regex::Regex::new(pattern).map_err(|e| format!("invalid regex: {}", e))?;
 
-    // Step 1: Plan the query (chooses trigram vs sparse strategy)
-    let plan = plan_query(pattern);
+    // Step 1: Plan the query (chooses trigram vs sparse strategy, or forced)
+    let plan = plan_query_with_strategy(pattern, strategy);
 
     // Step 2: Get candidate set from index using the plan's chosen hashes
     let candidates = resolve_candidates_from_plan(reader, &plan);
