@@ -1,0 +1,53 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/qndx-cli",
+    "crates/qndx-core",
+    "crates/qndx-index",
+    "crates/qndx-query",
+    "crates/qndx-git",
+    "crates/qndx-bench",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+# Internal crates
+qndx-core = { path = "crates/qndx-core" }
+qndx-index = { path = "crates/qndx-index" }
+qndx-query = { path = "crates/qndx-query" }
+qndx-git = { path = "crates/qndx-git" }
+qndx-bench = { path = "crates/qndx-bench" }
+
+# Benchmark framework
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Serialization candidates (for decision gate A)
+postcard = { version = "1", features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
+
+# Bit-set / compressed postings (for decision gate B)
+roaring = "0.10"
+
+# Git integration
+gix = { version = "0.69", default-features = false, features = ["basic", "worktree-mutation"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Regex
+regex = "1"
+regex-syntax = "0.8"
+
+# Hashing
+crc32fast = "1"
+
+# Random (deterministic fixtures)
+rand = "0.8"
+rand_chacha = "0.3"
+
+# Reporting
+serde_json = "1"

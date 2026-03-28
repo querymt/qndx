@@ -1,0 +1,45 @@
+[package]
+name = "qndx-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared bench fixtures and utilities for qndx"
+
+[dependencies]
+qndx-core = { workspace = true }
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+qndx-index = { workspace = true }
+qndx-query = { workspace = true }
+qndx-git = { workspace = true }
+postcard = { workspace = true }
+roaring = { workspace = true }
+
+[[bench]]
+name = "serializer_choice"
+harness = false
+
+[[bench]]
+name = "postings_choice"
+harness = false
+
+[[bench]]
+name = "ngram_extract"
+harness = false
+
+[[bench]]
+name = "query_planner"
+harness = false
+
+[[bench]]
+name = "end_to_end_search"
+harness = false
+
+[[bench]]
+name = "git_overlay"
+harness = false
