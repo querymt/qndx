@@ -1,0 +1,28 @@
+# Rust codebase benchmark patterns
+# Format: name<TAB>pattern  (or just pattern on its own line)
+
+# Literal queries
+TODO	TODO
+unwrap	unwrap()
+pub_fn	pub fn
+use_std	use std::
+println	println!
+
+# Identifier patterns
+impl_for	impl.*for
+derive	#\[derive
+self_dot	self\.\w+
+async_fn	async fn
+Result_type	Result<
+
+# Regex queries
+fn_definition	fn \w+\(
+struct_def	pub struct \w+
+enum_def	pub enum \w+
+trait_def	pub trait \w+
+mod_decl	pub mod \w+
+test_fn	#\[test\]
+cfg_attr	#\[cfg\(
+error_handling	\.map_err\(
+lifetime	<'\w+>
+turbofish	::<\w+>

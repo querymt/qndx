@@ -209,6 +209,183 @@ fn make_manifest(file_count: u32) -> qndx_core::Manifest {
     }
 }
 
+// ---------------------------------------------------------------------------
+// External (real) corpus support
+// ---------------------------------------------------------------------------
+
+use qndx_core::walk::WalkConfig;
+use std::path::Path;
+
+/// Configuration for loading an external corpus.
+pub struct ExternalCorpusConfig {
+    /// Maximum number of files to load (None = unlimited).
+    pub max_files: Option<usize>,
+    /// Maximum file size in bytes.
+    pub max_file_size: u64,
+}
+
+impl Default for ExternalCorpusConfig {
+    fn default() -> Self {
+        Self {
+            max_files: None,
+            max_file_size: 1_048_576, // 1 MB
+        }
+    }
+}
+
+impl ExternalCorpusConfig {
+    /// Build from environment variables.
+    pub fn from_env() -> Self {
+        let max_files = std::env::var("QNDX_BENCH_MAX_FILES")
+            .ok()
+            .and_then(|v| v.parse().ok());
+        let max_file_size = std::env::var("QNDX_BENCH_MAX_FILE_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1_048_576);
+        Self {
+            max_files,
+            max_file_size,
+        }
+    }
+}
+
+/// Load a real codebase from disk as a Corpus.
+///
+/// Walks the directory using the standard WalkConfig (respects .gitignore,
+/// skips binary files, etc.). Optionally limits the number of files loaded.
+pub fn external_corpus(root: &Path, config: &ExternalCorpusConfig) -> Corpus {
+    let name = root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "external".into());
+
+    let walk_config = WalkConfig {
+        max_file_size: config.max_file_size,
+        ..Default::default()
+    };
+
+    let discovered = qndx_core::walk::discover_files(root, &walk_config);
+
+    let limit = config.max_files.unwrap_or(usize::MAX);
+    let files: Vec<FixtureFile> = discovered
+        .into_iter()
+        .take(limit)
+        .filter_map(|f| {
+            let content = std::fs::read(&f.abs_path).ok()?;
+            Some(FixtureFile {
+                path: f.rel_path,
+                content,
+            })
+        })
+        .collect();
+
+    Corpus { name, files }
+}
+
+/// A named benchmark pattern (name, regex).
+pub struct NamedPattern {
+    pub name: String,
+    pub pattern: String,
+}
+
+/// Load patterns from a file.
+///
+/// Supports two formats per line:
+/// - `name<TAB>pattern` (e.g., `find_printk\tprintk`)
+/// - `pattern` alone (name is auto-generated from the pattern)
+///
+/// Empty lines and lines starting with `#` are skipped.
+pub fn load_patterns_file(path: &Path) -> Vec<NamedPattern> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "warning: could not read patterns file {}: {}",
+                path.display(),
+                e
+            );
+            return Vec::new();
+        }
+    };
+
+    content
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !trimmed.is_empty() && !trimmed.starts_with('#')
+        })
+        .enumerate()
+        .map(|(i, line)| {
+            if let Some((name, pattern)) = line.split_once('\t') {
+                NamedPattern {
+                    name: name.trim().to_string(),
+                    pattern: pattern.trim().to_string(),
+                }
+            } else {
+                let pat = line.trim().to_string();
+                let name = if pat.len() <= 30 {
+                    pat.clone()
+                } else {
+                    format!("pattern_{}", i)
+                };
+                NamedPattern { name, pattern: pat }
+            }
+        })
+        .collect()
+}
+
+/// Get the combined set of patterns for a real corpus benchmark.
+///
+/// Merges generic benchmark patterns with corpus-specific patterns from a file
+/// (if `QNDX_BENCH_PATTERNS` is set).
+pub fn real_corpus_patterns() -> Vec<NamedPattern> {
+    // Start with generic patterns
+    let mut patterns: Vec<NamedPattern> = benchmark_patterns()
+        .into_iter()
+        .map(|(name, pat)| NamedPattern {
+            name: name.to_string(),
+            pattern: pat.to_string(),
+        })
+        .collect();
+
+    // Add corpus-specific patterns if configured
+    if let Ok(path) = std::env::var("QNDX_BENCH_PATTERNS") {
+        let extra = load_patterns_file(Path::new(&path));
+        if !extra.is_empty() {
+            eprintln!("Loaded {} extra patterns from {}", extra.len(), path);
+        }
+        patterns.extend(extra);
+    }
+
+    patterns
+}
+
+/// Derive a short corpus name from a path, suitable for benchmark group names.
+///
+/// Uses `QNDX_BENCH_NAME` env var if set, otherwise the last path component.
+pub fn corpus_bench_name(root: &Path) -> String {
+    if let Ok(name) = std::env::var("QNDX_BENCH_NAME") {
+        return name;
+    }
+    root.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "corpus".into())
+}
+
+/// Format byte count as human-readable string.
+pub fn human_bytes(bytes: u64) -> String {
+    if bytes >= 1_073_741_824 {
+        format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
+    } else if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

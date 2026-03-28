@@ -11,6 +11,7 @@ rand = { workspace = true }
 rand_chacha = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+toml = "0.8"
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -20,6 +21,7 @@ qndx-git = { workspace = true }
 postcard = { workspace = true }
 wincode = { workspace = true }
 roaring = { workspace = true }
+tempfile = { workspace = true }
 
 [[bench]]
 name = "serializer_choice"
@@ -43,4 +45,8 @@ harness = false
 
 [[bench]]
 name = "git_overlay"
+harness = false
+
+[[bench]]
+name = "real_corpus"
 harness = false
