@@ -13,3 +13,5 @@ regex = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+qndx-index = { workspace = true }
+qndx-query = { workspace = true }
