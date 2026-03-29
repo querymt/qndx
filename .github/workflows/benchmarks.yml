@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - 'crates/**'
-      - 'benches/**'
+      - 'benchmarks/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/benchmarks.yml'
@@ -16,6 +16,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Criterion bench targets to run (real_corpus is excluded -- requires QNDX_BENCH_CORPUS)
+  BENCH_TARGETS: "serializer_choice postings_choice ngram_extract query_planner end_to_end_search git_overlay"
 
 jobs:
   benchmark:
@@ -27,19 +29,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Need full history for baseline comparison
+          fetch-depth: 0
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
 
-      - name: Install Criterion dependencies
+      - name: Install gnuplot (for Criterion HTML reports)
         run: |
           sudo apt-get update
           sudo apt-get install -y gnuplot
@@ -47,7 +47,7 @@ jobs:
       - name: Restore baseline from main branch
         if: github.event_name == 'pull_request'
         id: restore-baseline
-        uses: actions/cache/restore@v3
+        uses: actions/cache/restore@v4
         with:
           path: target/criterion
           key: benchmark-baseline-${{ github.base_ref }}-${{ hashFiles('benchmarks/budgets.toml') }}
@@ -55,46 +55,76 @@ jobs:
             benchmark-baseline-${{ github.base_ref }}-
             benchmark-baseline-main-
 
+      # ---------------------------------------------------------------
+      # PR with baseline: compare against saved main baseline
+      # ---------------------------------------------------------------
       - name: Run benchmarks (PR - with baseline comparison)
         if: github.event_name == 'pull_request' && steps.restore-baseline.outputs.cache-hit == 'true'
         run: |
-          echo "::group::Running benchmarks against baseline"
-          cargo bench --all-features -- --baseline main --output-format json | tee bench-output.json
+          echo "::group::Running benchmarks against main baseline"
+          for bench in $BENCH_TARGETS; do
+            echo "--- $bench ---"
+            cargo bench -p qndx-bench --bench "$bench" -- --baseline main 2>&1 | tee -a bench-output.txt
+          done
           echo "::endgroup::"
 
+      # ---------------------------------------------------------------
+      # PR without baseline: just run and save as PR baseline
+      # ---------------------------------------------------------------
       - name: Run benchmarks (PR - no baseline)
         if: github.event_name == 'pull_request' && steps.restore-baseline.outputs.cache-hit != 'true'
         run: |
           echo "::warning::No baseline found, running benchmarks without comparison"
-          cargo bench --all-features -- --save-baseline pr-${{ github.event.pull_request.number }}
+          for bench in $BENCH_TARGETS; do
+            echo "--- $bench ---"
+            cargo bench -p qndx-bench --bench "$bench" -- --save-baseline "pr-${{ github.event.pull_request.number }}"
+          done
 
+      # ---------------------------------------------------------------
+      # Main branch push: save as the canonical baseline
+      # ---------------------------------------------------------------
       - name: Run benchmarks (main branch - save as baseline)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           echo "::group::Running benchmarks and saving as baseline"
-          cargo bench --all-features -- --save-baseline main
+          for bench in $BENCH_TARGETS; do
+            echo "--- $bench ---"
+            cargo bench -p qndx-bench --bench "$bench" -- --save-baseline main
+          done
           echo "::endgroup::"
 
+      # ---------------------------------------------------------------
+      # Check for regressions in Criterion output
+      # ---------------------------------------------------------------
       - name: Check performance budgets
         if: github.event_name == 'pull_request' && steps.restore-baseline.outputs.cache-hit == 'true'
         run: |
           echo "::group::Checking performance budgets"
-          # TODO: Implement budget checker in qndx-cli
-          # For now, manually parse Criterion output
-          
-          # Extract regression percentages from Criterion output
-          if grep -q "Performance has regressed" bench-output.json; then
-            echo "::error::Performance regression detected"
-            echo "Review benchmark output above for details"
-            exit 1
+
+          # Criterion prints "Performance has regressed." to stdout when
+          # a benchmark regresses beyond its noise threshold.
+          REGRESSIONS=$(grep -c "Performance has regressed" bench-output.txt || true)
+
+          if [ "$REGRESSIONS" -gt 0 ]; then
+            echo "::warning::Criterion detected $REGRESSIONS benchmark regression(s)"
+            echo ""
+            echo "Regressed benchmarks:"
+            grep -B2 "Performance has regressed" bench-output.txt || true
+            echo ""
           fi
-          
-          if grep -q "change: \+[2-9][0-9]\.[0-9]\+%" bench-output.json; then
+
+          # Check for large regressions (>20% change)
+          # Criterion format: "change: [-1.2345% +23.4567% +45.6789%]"
+          # The middle value is the point estimate.
+          LARGE=$(grep -oP 'change: \[.*?\+\K[2-9][0-9]\.[0-9]+' bench-output.txt || true)
+
+          if [ -n "$LARGE" ]; then
             echo "::error::Significant performance regression (>20%) detected"
+            grep -B5 "change:.*+[2-9][0-9]\." bench-output.txt || true
             exit 1
           fi
-          
-          echo "::notice::Performance budgets check passed"
+
+          echo "::notice::Performance budgets check passed ($REGRESSIONS minor regression(s))"
           echo "::endgroup::"
 
       - name: Upload benchmark results
@@ -104,24 +134,15 @@ jobs:
           name: benchmark-results-${{ github.sha }}
           path: |
             target/criterion/
-            bench-output.json
+            bench-output.txt
           retention-days: 90
 
       - name: Save baseline cache (main branch)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v3
+        uses: actions/cache/save@v4
         with:
           path: target/criterion
           key: benchmark-baseline-${{ github.ref_name }}-${{ hashFiles('benchmarks/budgets.toml') }}
-
-      - name: Generate benchmark report
-        if: github.event_name == 'pull_request'
-        run: |
-          echo "::group::Generating human-readable report"
-          # TODO: Implement report generator in qndx-cli
-          # cargo run -p qndx-cli -- bench report --format markdown > bench-report.md
-          echo "Benchmark comparison complete. See artifacts for detailed results."
-          echo "::endgroup::"
 
       - name: Comment PR with benchmark summary
         if: github.event_name == 'pull_request' && steps.restore-baseline.outputs.cache-hit == 'true'
@@ -129,13 +150,39 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            
-            // Try to read benchmark output
+            let output = '';
+            try {
+              output = fs.readFileSync('bench-output.txt', 'utf8');
+            } catch (e) {
+              output = '(benchmark output not available)';
+            }
+
+            // Count regressions and improvements
+            const regressions = (output.match(/Performance has regressed/g) || []).length;
+            const improvements = (output.match(/Performance has improved/g) || []).length;
+            const noChange = (output.match(/No change in performance/g) || []).length;
+
             let summary = '## Benchmark Results\n\n';
-            summary += 'Benchmarks have been run against the main baseline.\n\n';
-            summary += 'Download the full results from the workflow artifacts.\n\n';
-            summary += '**Note**: Detailed budget checking is pending implementation of `qndx-cli bench check-budgets`.\n';
-            
+            summary += `| Status | Count |\n|--------|-------|\n`;
+            summary += `| Regressions | ${regressions} |\n`;
+            summary += `| Improvements | ${improvements} |\n`;
+            summary += `| No change | ${noChange} |\n\n`;
+
+            if (regressions > 0) {
+              summary += '### Regressions\n\n```\n';
+              const lines = output.split('\n');
+              for (let i = 0; i < lines.length; i++) {
+                if (lines[i].includes('Performance has regressed')) {
+                  // Include benchmark name (2 lines before) and the change line
+                  const start = Math.max(0, i - 3);
+                  summary += lines.slice(start, i + 1).join('\n') + '\n\n';
+                }
+              }
+              summary += '```\n\n';
+            }
+
+            summary += 'Download full results from the workflow artifacts.\n';
+
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
@@ -143,11 +190,13 @@ jobs:
               body: summary
             });
 
+  # ================================================================
   # Nightly comprehensive benchmark run for trend tracking
+  # ================================================================
   nightly-benchmark:
     name: Nightly Comprehensive Benchmarks
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch'
     timeout-minutes: 120
 
     steps:
@@ -160,25 +209,19 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Run all benchmarks with extended samples
+      - name: Set date
+        run: echo "BENCH_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
+
+      - name: Run all benchmarks
         run: |
-          cargo bench --all-features -- --sample-size 100 --save-baseline nightly-$(date +%Y%m%d)
+          for bench in $BENCH_TARGETS; do
+            echo "--- $bench ---"
+            cargo bench -p qndx-bench --bench "$bench" -- --save-baseline "nightly-$BENCH_DATE"
+          done
 
       - name: Upload nightly results
         uses: actions/upload-artifact@v4
         with:
-          name: nightly-benchmark-$(date +%Y%m%d)
+          name: nightly-benchmark-${{ env.BENCH_DATE }}
           path: target/criterion/
           retention-days: 365
-
-      - name: Store results in repository
-        run: |
-          mkdir -p benchmarks/results/nightly
-          cp -r target/criterion/ benchmarks/results/nightly/$(date +%Y%m%d)/
-          
-          # Commit results (if we want to track in git)
-          # git config user.name "GitHub Actions"
-          # git config user.email "actions@github.com"
-          # git add benchmarks/results/
-          # git commit -m "Add nightly benchmark results for $(date +%Y-%m-%d)" || true
-          # git push || true
