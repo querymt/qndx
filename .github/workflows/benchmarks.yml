@@ -22,7 +22,7 @@ env:
 jobs:
   benchmark:
     name: Run Benchmarks
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, freebsd]
     timeout-minutes: 60
 
     steps:
@@ -40,9 +40,7 @@ jobs:
           cache-on-failure: true
 
       - name: Install gnuplot (for Criterion HTML reports)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gnuplot
+        run: sudo pkg install -y gnuplot
 
       - name: Restore baseline from main branch
         if: github.event_name == 'pull_request'
@@ -116,7 +114,7 @@ jobs:
           # Check for large regressions (>20% change)
           # Criterion format: "change: [-1.2345% +23.4567% +45.6789%]"
           # The middle value is the point estimate.
-          LARGE=$(grep -oP 'change: \[.*?\+\K[2-9][0-9]\.[0-9]+' bench-output.txt || true)
+          LARGE=$(awk '/change:/{match($0,/\+([0-9]+\.[0-9]+)%/,a); if(a[1]+0>=20) print a[1]}' bench-output.txt || true)
 
           if [ -n "$LARGE" ]; then
             echo "::error::Significant performance regression (>20%) detected"
@@ -195,7 +193,7 @@ jobs:
   # ================================================================
   nightly-benchmark:
     name: Nightly Comprehensive Benchmarks
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, freebsd]
     if: github.event_name == 'workflow_dispatch'
     timeout-minutes: 120
 
