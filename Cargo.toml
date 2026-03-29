@@ -31,7 +31,7 @@ wincode = { version = "0.5", features = ["derive", "alloc"] }
 serde = { version = "1", features = ["derive"] }
 
 # Bit-set / compressed postings (for decision gate B)
-roaring = "0.10"
+roaring = "0.11"
 
 # Git integration
 gix = { version = "0.80", default-features = false, features = ["basic", "worktree-mutation"] }
