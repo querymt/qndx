@@ -2,9 +2,9 @@
 //!
 //! All generators use a fixed seed so results are reproducible across runs.
 
-use rand::Rng;
+use rand::rngs::ChaCha8Rng;
+use rand::RngExt;
 use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
 
 /// Fixed seed for all fixture generation.
 const FIXTURE_SEED: u64 = 0xDEAD_BEEF_CAFE_1234;
@@ -84,15 +84,15 @@ fn generate_source_file(rng: &mut ChaCha8Rng, approx_size: usize) -> Vec<u8> {
 
     while content.len() < approx_size {
         // Mix of identifiers, keywords, operators, and newlines
-        let choice: u8 = rng.gen_range(0..100);
+        let choice: u8 = rng.random_range(0..100);
         let segment: &[u8] = if choice < 35 {
-            let idx = rng.gen_range(0..IDENTIFIERS.len());
+            let idx = rng.random_range(0..IDENTIFIERS.len());
             IDENTIFIERS[idx].as_bytes()
         } else if choice < 55 {
-            let idx = rng.gen_range(0..KEYWORDS.len());
+            let idx = rng.random_range(0..KEYWORDS.len());
             KEYWORDS[idx].as_bytes()
         } else if choice < 75 {
-            let idx = rng.gen_range(0..OPERATORS.len());
+            let idx = rng.random_range(0..OPERATORS.len());
             OPERATORS[idx].as_bytes()
         } else if choice < 85 {
             b"\n"
@@ -100,10 +100,10 @@ fn generate_source_file(rng: &mut ChaCha8Rng, approx_size: usize) -> Vec<u8> {
             b"    " // indentation
         } else {
             // Random ASCII identifier-like string
-            let len = rng.gen_range(3..12);
+            let len = rng.random_range(3..12);
             let s: Vec<u8> = (0..len)
                 .map(|_| {
-                    let c = rng.gen_range(0..62);
+                    let c = rng.random_range(0..62);
                     if c < 26 {
                         b'a' + c
                     } else if c < 52 {
@@ -145,7 +145,7 @@ pub fn generate_corpus(name: &str, file_count: usize, avg_file_size: usize) -> C
     let files = (0..file_count)
         .map(|i| {
             // Vary file sizes +-50% around the average
-            let size_factor: f64 = 0.5 + rng.gen::<f64>();
+            let size_factor: f64 = 0.5 + rng.random::<f64>();
             let size = (avg_file_size as f64 * size_factor) as usize;
             FixtureFile {
                 path: format!("src/module_{:04}/file_{:04}.rs", i / 10, i),
@@ -196,10 +196,10 @@ fn make_manifest(file_count: u32) -> qndx_core::Manifest {
         base_commit: Some("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2".into()),
         files: (0..file_count)
             .map(|i| {
-                let depth = rng.gen_range(1..=4);
+                let depth = rng.random_range(1..=4);
                 let parts: Vec<String> = (0..depth)
                     .map(|_| {
-                        let idx = rng.gen_range(0..IDENTIFIERS.len());
+                        let idx = rng.random_range(0..IDENTIFIERS.len());
                         IDENTIFIERS[idx].to_lowercase()
                     })
                     .collect();

@@ -10,16 +10,16 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use qndx_index::postings::PostingList;
-use rand::Rng;
+use rand::rngs::ChaCha8Rng;
+use rand::RngExt;
 use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
 use std::hint::black_box;
 
 const SEED: u64 = 0xBEEF_CAFE_1234_5678;
 
 /// Generate a sorted, deduplicated list of random file IDs.
 fn random_ids(rng: &mut ChaCha8Rng, count: usize, max_id: u32) -> Vec<u32> {
-    let mut ids: Vec<u32> = (0..count).map(|_| rng.gen_range(0..max_id)).collect();
+    let mut ids: Vec<u32> = (0..count).map(|_| rng.random_range(0..max_id)).collect();
     ids.sort_unstable();
     ids.dedup();
     ids
