@@ -40,7 +40,7 @@ jobs:
           cache-on-failure: true
 
       - name: Install gnuplot (for Criterion HTML reports)
-        run: sudo pkg install -y gnuplot
+        run: pkg install -y gnuplot
 
       - name: Restore baseline from main branch
         if: github.event_name == 'pull_request'
