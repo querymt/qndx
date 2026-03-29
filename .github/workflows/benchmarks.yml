@@ -114,11 +114,18 @@ jobs:
           # Check for large regressions (>20% change)
           # Criterion format: "change: [-1.2345% +23.4567% +45.6789%]"
           # The middle value is the point estimate.
-          LARGE=$(awk '/change:/{match($0,/\+([0-9]+\.[0-9]+)%/,a); if(a[1]+0>=20) print a[1]}' bench-output.txt || true)
+          LARGE=$(awk '/change:/{
+            s=$0; n=0
+            while(match(s,/\+[0-9]+\.[0-9]+%/)){
+              n++; val=substr(s,RSTART+1,RLENGTH-2)+0
+              s=substr(s,RSTART+RLENGTH)
+              if(n==2 && val>=20) print val
+            }
+          }' bench-output.txt || true)
 
           if [ -n "$LARGE" ]; then
             echo "::error::Significant performance regression (>20%) detected"
-            grep -B5 "change:.*+[2-9][0-9]\." bench-output.txt || true
+            grep -EB5 'change:.*\+[0-9]{2,}\.[0-9]' bench-output.txt || true
             exit 1
           fi
 
