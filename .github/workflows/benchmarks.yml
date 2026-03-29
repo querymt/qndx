@@ -47,7 +47,7 @@ jobs:
       - name: Restore baseline from main branch
         if: github.event_name == 'pull_request'
         id: restore-baseline
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: target/criterion
           key: benchmark-baseline-${{ github.base_ref }}-${{ hashFiles('benchmarks/budgets.toml') }}
@@ -139,7 +139,7 @@ jobs:
 
       - name: Save baseline cache (main branch)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: target/criterion
           key: benchmark-baseline-${{ github.ref_name }}-${{ hashFiles('benchmarks/budgets.toml') }}
