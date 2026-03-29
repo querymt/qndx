@@ -146,7 +146,7 @@ jobs:
 
       - name: Comment PR with benchmark summary
         if: github.event_name == 'pull_request' && steps.restore-baseline.outputs.cache-hit == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const fs = require('fs');
