@@ -92,60 +92,14 @@ jobs:
           echo "::endgroup::"
 
       # ---------------------------------------------------------------
-      # Check for regressions in Criterion output
+      # Check for regressions against budgets.toml
       # ---------------------------------------------------------------
       - name: Check performance budgets
         if: github.event_name == 'pull_request' && steps.restore-baseline.outputs.cache-hit == 'true'
         run: |
-          echo "::group::Checking performance budgets"
-
-          # Criterion prints "Performance has regressed." to stdout when
-          # a benchmark regresses beyond its noise threshold.
-          REGRESSIONS=$(grep -c "Performance has regressed" bench-output.txt || true)
-
-          if [ "$REGRESSIONS" -gt 0 ]; then
-            echo "::warning::Criterion detected $REGRESSIONS benchmark regression(s)"
-            echo ""
-            echo "Regressed benchmarks:"
-            grep -B2 "Performance has regressed" bench-output.txt || true
-            echo ""
-          fi
-
-          # Check for large regressions (>20% change)
-          # Criterion format A (multi-line):
-          #   change:
-          #          time:   [+1.23% +22.78% +23.45%] (p = 0.00 < 0.05)
-          # Criterion format B (single-line):
-          #          change: [+1.23% +22.78% +23.45%] (p = 0.00 < 0.05)
-          # The middle value (2nd match) is the point estimate.
-          LARGE=$(awk '
-            /change:.*\+[0-9]+\.[0-9]+%/ {
-              s=$0; n=0
-              while(match(s,/\+[0-9]+\.[0-9]+%/)){
-                n++; val=substr(s,RSTART+1,RLENGTH-2)+0
-                s=substr(s,RSTART+RLENGTH)
-                if(n==2 && val>=20) print val
-              }
-            }
-            /change:/ && !/\+[0-9]+\.[0-9]+%/ {
-              getline
-              s=$0; n=0
-              while(match(s,/\+[0-9]+\.[0-9]+%/)){
-                n++; val=substr(s,RSTART+1,RLENGTH-2)+0
-                s=substr(s,RSTART+RLENGTH)
-                if(n==2 && val>=20) print val
-              }
-            }
-          ' bench-output.txt || true)
-
-          if [ -n "$LARGE" ]; then
-            echo "::error::Significant performance regression (>20%) detected"
-            grep -EB5 '\+[0-9][0-9][0-9]*\.[0-9]*%' bench-output.txt || true
-            exit 1
-          fi
-
-          echo "::notice::Performance budgets check passed ($REGRESSIONS minor regression(s))"
-          echo "::endgroup::"
+          cargo run -p qndx-cli -- bench check-budgets \
+            --comparison bench-output.txt \
+            --budgets benchmarks/budgets.toml
 
       - name: Upload benchmark results
         if: always()

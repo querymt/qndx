@@ -180,6 +180,32 @@ critical = true
 description = "Total n-grams stored in index"
 
 # ============================================================================
+# Criterion Name → Budget Key Mapping
+#
+# Maps Criterion benchmark names (group/variant/...) to budget keys above.
+# Patterns use simple glob matching: * matches any single path segment.
+# First match wins, so more specific patterns should come first.
+# ============================================================================
+
+[mapping]
+"serializer_choice/*/encode/*" = "serializer_choice.encode"
+"serializer_choice/*/decode/*" = "serializer_choice.decode"
+"postings_intersect_union/*/intersect/low" = "postings_choice.intersection.low"
+"postings_intersect_union/*/intersect/medium" = "postings_choice.intersection.medium"
+"postings_intersect_union/*/intersect/high" = "postings_choice.intersection.high"
+"postings_intersect_union/*/union/low" = "postings_choice.union.low"
+"postings_intersect_union/*/union/medium" = "postings_choice.union.medium"
+"postings_intersect_union/*/union/high" = "postings_choice.union.high"
+"postings_encode_decode/*/encode/*" = "postings_choice.encode"
+"postings_encode_decode/*/decode/*" = "postings_choice.decode"
+"ngram_extract/*/build/*" = "ngram_extract.throughput"
+"query_planner/plan/*" = "query_planner.planning_time"
+"end_to_end_search/search/literal_*" = "end_to_end_search.literal"
+"end_to_end_search/search/regex_*" = "end_to_end_search.regex"
+"git_overlay/detect_dirty_files" = "git_overlay.dirty_detection"
+"git_overlay/head_commit" = "git_overlay.dirty_detection"
+
+# ============================================================================
 # CI Enforcement Configuration
 # ============================================================================
 
@@ -189,13 +215,3 @@ fail_on_critical = true
 
 # Warn (but don't fail) if non-critical budgets are violated
 warn_on_noncritical = true
-
-# Number of times to retry benchmark if initial run shows regression
-# (helps avoid false positives from CI noise)
-retry_on_regression = 2
-
-# Minimum sample size for statistical significance
-min_samples = 50
-
-# Warmup iterations before measurement
-warmup_iterations = 10
