@@ -409,13 +409,14 @@ pub struct CorpusEntry {
 
 /// Defaults section from `benchmarks/corpora.toml`.
 #[derive(Debug, Clone, Deserialize)]
-struct CorporaDefaults {
+#[allow(dead_code)]
+pub struct CorporaDefaults {
     #[serde(default)]
-    standard: Vec<String>,
+    pub standard: Vec<String>,
     #[serde(default = "default_max_file_size")]
-    max_file_size: u64,
+    pub max_file_size: u64,
     #[serde(default)]
-    max_files: usize,
+    pub max_files: usize,
 }
 
 fn default_max_file_size() -> u64 {
@@ -434,11 +435,11 @@ impl Default for CorporaDefaults {
 
 /// Top-level structure of `benchmarks/corpora.toml`.
 #[derive(Debug, Clone, Deserialize)]
-struct CorporaConfig {
+pub struct CorporaConfig {
     #[serde(default)]
-    corpora: HashMap<String, CorpusEntry>,
+    pub corpora: HashMap<String, CorpusEntry>,
     #[serde(default)]
-    defaults: CorporaDefaults,
+    pub defaults: CorporaDefaults,
 }
 
 /// A discovered standard corpus ready for benchmarking.
@@ -505,7 +506,12 @@ pub fn discover_standard_corpora(
     let target_names: Vec<&str> = if !names.is_empty() {
         names.iter().map(|s| s.as_str()).collect()
     } else {
-        config.defaults.standard.iter().map(|s| s.as_str()).collect()
+        config
+            .defaults
+            .standard
+            .iter()
+            .map(|s| s.as_str())
+            .collect()
     };
 
     let mut found = Vec::new();
@@ -689,7 +695,10 @@ description = "Test"
         // This test succeeds when run from the project root (cargo test).
         // It may be skipped if running from a different directory.
         if let Some((config, root)) = load_corpora_config() {
-            assert!(!config.corpora.is_empty(), "corpora.toml should have entries");
+            assert!(
+                !config.corpora.is_empty(),
+                "corpora.toml should have entries"
+            );
             assert!(
                 root.join("benchmarks/corpora.toml").is_file(),
                 "project root should contain corpora.toml"
