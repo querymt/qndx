@@ -20,7 +20,7 @@ use qndx_core::format::{
 };
 use qndx_core::{FileId, Manifest, NgramEntry, NgramHash};
 
-use crate::ngram::{extract_sparse_ngrams, extract_trigrams};
+use crate::ngram::{extract_sparse_ngrams_all, extract_trigrams};
 use crate::postings::{PostingList, DEFAULT_HYBRID_THRESHOLD};
 
 /// Result of building an index.
@@ -68,7 +68,7 @@ pub fn build_index(
         }
 
         // Extract sparse n-grams (build-all approach)
-        let sparse = extract_sparse_ngrams(content);
+        let sparse = extract_sparse_ngrams_all(content);
         for (hash, _len) in sparse {
             sparse_hashes.insert(hash);
             inverted.entry(hash).or_default().push(fid);
@@ -201,8 +201,8 @@ pub fn build_index_from_dir(
             inverted.entry(hash).or_default().push(fid);
         }
 
-        // Extract sparse n-grams
-        let sparse = extract_sparse_ngrams(&content);
+        // Extract sparse n-grams (build-all approach)
+        let sparse = extract_sparse_ngrams_all(&content);
         for (hash, _len) in sparse {
             sparse_hashes.insert(hash);
             inverted.entry(hash).or_default().push(fid);
@@ -375,13 +375,16 @@ mod tests {
 
         let result = build_index(&sample_files(), &index_dir, None).unwrap();
 
-        // Should have both trigrams and sparse n-grams
-        assert!(result.trigram_count > 0, "should have trigrams");
+        // build_all produces all qualifying substrings, including bigram and
+        // trigram-length spans. Hashes that appear in both trigram and sparse
+        // extraction are classified as sparse (FLAG_SPARSE wins). So
+        // trigram_count may be 0 if build_all covers all trigram hashes.
+        assert!(result.ngram_count > 0, "should have n-grams");
         assert!(result.sparse_count > 0, "should have sparse n-grams");
         assert_eq!(
             result.ngram_count,
             result.trigram_count + result.sparse_count,
-            "total should equal trigram + sparse (note: some hashes may overlap and be counted as sparse)"
+            "total should equal trigram-only + sparse"
         );
     }
 }

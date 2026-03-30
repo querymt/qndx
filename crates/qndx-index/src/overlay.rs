@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use qndx_core::{FileId, NgramHash};
 use qndx_git::{FileStatus, GitRepo};
 
-use crate::ngram::{extract_sparse_ngrams, extract_trigrams};
+use crate::ngram::{extract_sparse_ngrams_all, extract_trigrams};
 use crate::postings::PostingList;
 
 /// A lightweight overlay index for dirty files in the working tree.
@@ -129,8 +129,8 @@ impl OverlayIndex {
             self.ngrams.entry(hash).or_default().push(file_id);
         }
 
-        // Extract sparse n-grams
-        let sparse = extract_sparse_ngrams(content);
+        // Extract sparse n-grams (build-all approach)
+        let sparse = extract_sparse_ngrams_all(content);
         for (hash, _len) in sparse {
             self.ngrams.entry(hash).or_default().push(file_id);
         }

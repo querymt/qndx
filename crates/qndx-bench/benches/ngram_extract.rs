@@ -5,7 +5,9 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use qndx_bench::fixtures;
-use qndx_index::ngram::{extract_sparse_ngrams, extract_trigrams};
+use qndx_index::ngram::{
+    extract_sparse_ngrams_all, extract_sparse_ngrams_covering, extract_trigrams,
+};
 use std::hint::black_box;
 
 fn bench_ngram_extract(c: &mut Criterion) {
@@ -39,15 +41,31 @@ fn bench_ngram_extract(c: &mut Criterion) {
             },
         );
 
-        // --- Sparse n-gram extraction over entire corpus ---
+        // --- Sparse n-gram build_all extraction (index time) ---
         group.bench_with_input(
-            BenchmarkId::new("sparse/build", label),
+            BenchmarkId::new("sparse_all/build", label),
             &corpus.files,
             |b, files| {
                 b.iter(|| {
                     let mut total_grams = 0usize;
                     for f in files {
-                        let grams = extract_sparse_ngrams(black_box(&f.content));
+                        let grams = extract_sparse_ngrams_all(black_box(&f.content));
+                        total_grams += grams.len();
+                    }
+                    black_box(total_grams)
+                });
+            },
+        );
+
+        // --- Sparse n-gram build_covering extraction (query time) ---
+        group.bench_with_input(
+            BenchmarkId::new("sparse_covering/build", label),
+            &corpus.files,
+            |b, files| {
+                b.iter(|| {
+                    let mut total_grams = 0usize;
+                    for f in files {
+                        let grams = extract_sparse_ngrams_covering(black_box(&f.content));
                         total_grams += grams.len();
                     }
                     black_box(total_grams)
@@ -61,18 +79,19 @@ fn bench_ngram_extract(c: &mut Criterion) {
             .iter()
             .map(|f| extract_trigrams(&f.content).len())
             .sum();
-        let sparse_count: usize = corpus
+        let sparse_all_count: usize = corpus
             .files
             .iter()
-            .map(|f| extract_sparse_ngrams(&f.content).len())
+            .map(|f| extract_sparse_ngrams_all(&f.content).len())
+            .sum();
+        let sparse_cov_count: usize = corpus
+            .files
+            .iter()
+            .map(|f| extract_sparse_ngrams_covering(&f.content).len())
             .sum();
         eprintln!(
-            "  [stats] {}: trigrams={}, sparse={}, ratio={:.2}x, corpus_bytes={}",
-            label,
-            trigram_count,
-            sparse_count,
-            sparse_count as f64 / trigram_count.max(1) as f64,
-            total_bytes,
+            "  [stats] {}: trigrams={}, sparse_all={}, sparse_covering={}, corpus_bytes={}",
+            label, trigram_count, sparse_all_count, sparse_cov_count, total_bytes,
         );
     }
 

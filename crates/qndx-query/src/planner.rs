@@ -150,13 +150,11 @@ pub fn plan_query_full(
             .sum::<f64>();
 
     // --- Build sparse plan ---
-    let sparse_required_covering =
-        sparse_covering(&decomposition.sparse_required, trigram_required.len());
+    let sparse_required_covering = sparse_covering(&decomposition.sparse_required);
     let sparse_alt_coverings: Vec<Option<Vec<SparseGram>>> = decomposition
         .sparse_alternatives
         .iter()
-        .zip(trigram_alternatives.iter())
-        .map(|(sp, tri)| sparse_covering(sp, tri.len()))
+        .map(|sp| sparse_covering(sp))
         .collect();
 
     // Evaluate sparse cost (only if all parts have coverage)
@@ -257,13 +255,11 @@ pub fn plan_diagnostics_with_strategy(
             .sum::<f64>();
 
     // Sparse plan
-    let sparse_required_covering =
-        sparse_covering(&decomposition.sparse_required, trigram_required.len());
+    let sparse_required_covering = sparse_covering(&decomposition.sparse_required);
     let sparse_alt_coverings: Vec<Option<Vec<SparseGram>>> = decomposition
         .sparse_alternatives
         .iter()
-        .zip(trigram_alternatives.iter())
-        .map(|(sp, tri)| sparse_covering(sp, tri.len()))
+        .map(|sp| sparse_covering(sp))
         .collect();
     let sparse_plan = build_sparse_plan(
         &sparse_required_covering,
@@ -376,18 +372,24 @@ mod tests {
     }
 
     #[test]
-    fn sparse_preferred_for_long_literal() {
-        // A long literal should produce sparse grams that are fewer than trigrams
+    fn sparse_preferred_when_cost_is_lower() {
+        // The planner selects sparse when its estimated cost is lower than trigrams.
+        // Cost accounts for gram length (longer grams are more selective), so sparse
+        // may be preferred even with more lookups if the grams are longer.
+        let diag = plan_diagnostics("DatabaseConnection_handler_initialize");
+        if let (Some(sparse_cost), Some(_sparse_lookups)) = (diag.sparse_cost, diag.sparse_lookups)
+        {
+            if sparse_cost < diag.trigram_cost {
+                assert_eq!(diag.selected.strategy, PlanStrategy::Sparse);
+            } else {
+                assert_eq!(diag.selected.strategy, PlanStrategy::Trigram);
+            }
+        }
+
+        // Verify that when sparse IS selected, the plan uses sparse hashes
         let plan = plan_query("DatabaseConnection_handler_initialize");
-        // The sparse plan should have fewer lookups if it was selected
         if plan.strategy == PlanStrategy::Sparse {
-            let trigram_count = plan.decomposition.required.len();
-            assert!(
-                plan.lookup_count < trigram_count,
-                "sparse should have fewer lookups: {} vs {}",
-                plan.lookup_count,
-                trigram_count,
-            );
+            assert!(!plan.required_hashes.is_empty());
         }
     }
 
@@ -408,12 +410,13 @@ mod tests {
             total_docs: 1000,
         };
         let plan = plan_query_with_estimator("MAX_FILE_SIZE", &est);
-        // With trigrams being very common and sparse being very rare,
-        // sparse should be preferred if it covers
-        if !decomp.sparse_required.is_empty()
-            && decomp.sparse_required.len() < decomp.required.len()
-        {
-            assert_eq!(plan.strategy, PlanStrategy::Sparse);
+        // With trigrams being very common and sparse being very rare, the
+        // cost model should prefer sparse whenever sparse grams are available.
+        let diag = plan_diagnostics("MAX_FILE_SIZE");
+        if let (Some(sparse_cost), _) = (diag.sparse_cost, diag.sparse_lookups) {
+            if sparse_cost < diag.trigram_cost {
+                assert_eq!(plan.strategy, PlanStrategy::Sparse);
+            }
         }
     }
 

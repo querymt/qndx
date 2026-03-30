@@ -7,7 +7,7 @@
 //! with fewer, longer n-grams for reduced posting lookups.
 
 use qndx_core::NgramHash;
-use qndx_index::ngram::{extract_sparse_ngrams, extract_trigrams};
+use qndx_index::ngram::{extract_sparse_ngrams_covering, extract_trigrams};
 
 /// A sparse n-gram with its hash and the byte length of the original gram.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -55,7 +55,7 @@ pub fn decompose_pattern(pattern: &str) -> Decomposition {
             let trigrams = extract_trigrams(lit.as_bytes());
             required.extend(trigrams);
 
-            let sparse = extract_sparse_ngrams(lit.as_bytes());
+            let sparse = extract_sparse_ngrams_covering(lit.as_bytes());
             for (hash, gram_len) in sparse {
                 sparse_required.push(SparseGram { hash, gram_len });
             }
@@ -83,7 +83,7 @@ pub fn decompose_pattern(pattern: &str) -> Decomposition {
                 let trigrams = extract_trigrams(lit.as_bytes());
                 hashes.extend(trigrams);
 
-                let sparse = extract_sparse_ngrams(lit.as_bytes());
+                let sparse = extract_sparse_ngrams_covering(lit.as_bytes());
                 for (hash, gram_len) in sparse {
                     sparse_branch.push(SparseGram { hash, gram_len });
                 }
@@ -105,26 +105,25 @@ pub fn decompose_pattern(pattern: &str) -> Decomposition {
     }
 }
 
-/// Select a minimal sparse covering set from available sparse n-grams.
+/// Select a sparse covering set from available sparse n-grams.
 ///
 /// Given a list of sparse n-grams (each covering some byte span of the literal),
-/// and the trigram hashes for the same literal, returns a subset of sparse grams
-/// that fully covers the literal with fewer lookups than the trigram set.
+/// returns all of them as a valid covering if any exist. The planner's cost model
+/// decides whether sparse or trigram is cheaper — this function no longer
+/// pre-filters on count, so longer (more selective) grams get a fair comparison.
 ///
-/// If the sparse set cannot cover the literal (e.g., all grams are the same length
-/// as trigrams), returns None, signaling a fallback to trigrams.
-pub fn sparse_covering(sparse: &[SparseGram], trigram_count: usize) -> Option<Vec<SparseGram>> {
+/// Returns None only when no sparse grams are available at all.
+///
+/// TODO: Add smarter covering-set selection here (e.g. drop grams whose
+/// cost exceeds a threshold, or greedily prune to a minimal covering).
+/// The subset invariant (covering ⊆ build_all) is now guaranteed by
+/// `extract_sparse_ngrams_all` at index time.
+pub fn sparse_covering(sparse: &[SparseGram]) -> Option<Vec<SparseGram>> {
     if sparse.is_empty() {
         return None;
     }
 
-    // The sparse n-grams already form a valid covering from the extraction algorithm.
-    // We only prefer sparse if it requires fewer lookups than the trigram path.
-    if sparse.len() < trigram_count {
-        Some(sparse.to_vec())
-    } else {
-        None // No benefit — fall back to trigrams
-    }
+    Some(sparse.to_vec())
 }
 
 /// Extract literal segments from a pattern for diagnostic display.

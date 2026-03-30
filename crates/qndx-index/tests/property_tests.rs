@@ -7,7 +7,9 @@ use qndx_core::format::{
     decode_postings, decode_postings_varint, encode_postings, encode_postings_varint,
 };
 use qndx_core::FileId;
-use qndx_index::ngram::extract_trigrams;
+use qndx_index::ngram::{
+    extract_sparse_ngrams_all, extract_sparse_ngrams_covering, extract_trigrams,
+};
 use qndx_index::postings::PostingList;
 
 // ---------------------------------------------------------------------------
@@ -286,6 +288,58 @@ proptest! {
             varint.len() <= fixed.len(),
             "varint ({}) should be <= fixed ({}) for {} ids",
             varint.len(), fixed.len(), ids.len()
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sparse n-gram subset invariant: covering(substring) ⊆ all(superstring)
+// ---------------------------------------------------------------------------
+
+proptest! {
+    /// The core correctness property: sparse grams extracted with the covering
+    /// algorithm from any substring must be a subset of those extracted with
+    /// build_all from the containing string.
+    #[test]
+    fn sparse_covering_subset_of_all(
+        data in prop::collection::vec(any::<u8>(), 4..300),
+        start in any::<prop::sample::Index>(),
+        len in 3usize..60,
+    ) {
+        let start = start.index(data.len().saturating_sub(2).max(1));
+        let end = (start + len).min(data.len());
+        if end - start < 2 {
+            return Ok(()); // substring too short for any sparse grams
+        }
+        let substring = &data[start..end];
+
+        let all_hashes: std::collections::HashSet<u32> = extract_sparse_ngrams_all(&data)
+            .iter()
+            .map(|(h, _)| *h)
+            .collect();
+        let covering_hashes: std::collections::HashSet<u32> =
+            extract_sparse_ngrams_covering(substring)
+                .iter()
+                .map(|(h, _)| *h)
+                .collect();
+
+        let missing: Vec<_> = covering_hashes.difference(&all_hashes).collect();
+        prop_assert!(
+            missing.is_empty(),
+            "covering(data[{}..{}]) has {} hashes not in all(data[0..{}]): {:?}",
+            start, end, missing.len(), data.len(), missing,
+        );
+    }
+
+    /// build_all always produces at least as many distinct hashes as build_covering.
+    #[test]
+    fn sparse_all_ge_covering(data in prop::collection::vec(any::<u8>(), 2..300)) {
+        let all = extract_sparse_ngrams_all(&data);
+        let covering = extract_sparse_ngrams_covering(&data);
+        prop_assert!(
+            all.len() >= covering.len(),
+            "all ({}) < covering ({}) for input of len {}",
+            all.len(), covering.len(), data.len(),
         );
     }
 }

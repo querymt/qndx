@@ -6,7 +6,7 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use qndx_bench::fixtures;
-use qndx_index::ngram::{extract_sparse_ngrams, extract_trigrams};
+use qndx_index::ngram::{extract_sparse_ngrams_all, extract_trigrams};
 use qndx_query::planner::{plan_query, PlanStrategy};
 use qndx_query::verify::verify_candidates;
 use std::hint::black_box;
@@ -27,7 +27,7 @@ impl FileNgrams {
         let sparse = files
             .iter()
             .map(|(_, content)| {
-                let mut hashes: Vec<u32> = extract_sparse_ngrams(content)
+                let mut hashes: Vec<u32> = extract_sparse_ngrams_all(content)
                     .into_iter()
                     .map(|(h, _)| h)
                     .collect();
