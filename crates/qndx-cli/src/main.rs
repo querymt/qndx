@@ -319,6 +319,7 @@ fn run_index_search(
     start: Instant,
     strategy: StrategyOverride,
 ) {
+    let open_start = show_stats.then(Instant::now);
     let reader = match qndx_index::IndexReader::open(index_dir) {
         Ok(r) => r,
         Err(e) => {
@@ -326,8 +327,13 @@ fn run_index_search(
             std::process::exit(1);
         }
     };
+    let open_time_ms = open_start
+        .map(|start| start.elapsed().as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
 
-    match qndx_query::index_search_with_strategy(&reader, root, pattern, strategy) {
+    match qndx_query::index_search_with_strategy_and_timing(
+        &reader, root, pattern, strategy, show_stats,
+    ) {
         Ok(result) => {
             if files_only {
                 let mut seen = std::collections::BTreeSet::new();
@@ -346,6 +352,13 @@ fn run_index_search(
                         result.stats.strategy,
                         elapsed.as_secs_f64(),
                     );
+                    eprintln!(
+                        "  timing: open={:.3}ms, plan={:.3}ms, candidates={:.3}ms, verify={:.3}ms",
+                        open_time_ms,
+                        result.stats.plan_time_ms,
+                        result.stats.candidate_time_ms,
+                        result.stats.verify_time_ms,
+                    );
                 }
             } else {
                 for m in &result.results.matches {
@@ -363,6 +376,13 @@ fn run_index_search(
                         result.stats.lookup_count,
                         result.stats.strategy,
                         elapsed.as_secs_f64(),
+                    );
+                    eprintln!(
+                        "  timing: open={:.3}ms, plan={:.3}ms, candidates={:.3}ms, verify={:.3}ms",
+                        open_time_ms,
+                        result.stats.plan_time_ms,
+                        result.stats.candidate_time_ms,
+                        result.stats.verify_time_ms,
                     );
                 }
             }

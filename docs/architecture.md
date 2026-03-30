@@ -55,7 +55,7 @@ Builds and reads the on-disk index.
 
   Binary search reads only the 4-byte hash field at each step (not the full 20-byte entry), minimizing cache pressure. Postings are sliced directly from the mmap'd region with no copying.
 
-- **N-gram** (`ngram.rs`): Trigram extraction (overlapping 3-byte windows) and sparse n-gram extraction (variable-length n-grams selected by hash-based weight function). Both produce `NgramHash` values.
+- **N-gram** (`ngram.rs`): Trigram extraction (overlapping 3-byte windows) and sparse n-gram extraction with two modes: `extract_sparse_ngrams_all` (index-time superset) and `extract_sparse_ngrams_covering` (query-time minimal covering). Both produce `NgramHash` values.
 
 - **Postings** (`postings.rs`): Three representations:
   - `Vec<u32>`: sorted file IDs, good for small lists
@@ -73,7 +73,7 @@ Builds and reads the on-disk index.
 
 Analyzes patterns and executes searches.
 
-- **Decompose** (`decompose.rs`): Extracts literal segments from regex patterns. Handles top-level alternation (`a|b` produces OR branches), character classes, escapes. Produces both trigram hashes and sparse n-gram hashes for each literal segment.
+- **Decompose** (`decompose.rs`): Extracts literal segments from regex patterns. Handles top-level alternation (`a|b` produces OR branches), character classes, escapes. Produces trigram hashes plus sparse covering grams (`extract_sparse_ngrams_covering`) for each literal segment.
 
 - **Planner** (`planner.rs`): Evaluates two strategies per query:
   - **Trigram plan**: use all overlapping trigrams from extracted literals
@@ -90,7 +90,7 @@ Analyzes patterns and executes searches.
   4. Verify with the full regex
   5. Extract match positions (line, column, text)
 
-  Also provides `index_search_with_overlay()` for the freshness path.
+  Emits per-stage timing stats (`plan_time_ms`, `candidate_time_ms`, `verify_time_ms`) and also provides `index_search_with_overlay()` for the freshness path.
 
 - **Verify** (`verify.rs`): Boolean and position-extracting verification of candidates against the original regex.
 
@@ -110,7 +110,7 @@ CLI entrypoints using [clap](https://crates.io/crates/clap).
 
 Commands: `index`, `search`, `plan`, `bench report`, `bench check-budgets`.
 
-The search command auto-detects the index (looks for `.qndx/index/v1/ngrams.tbl`) and falls back to scan-only if not present.
+The search command auto-detects the index (looks for `.qndx/index/v1/ngrams.tbl`) and falls back to scan-only if not present. With `--stats`, indexed search enables timing collection and prints a stage breakdown: index open, planning, candidate resolution, and verification.
 
 ### qndx-bench
 
@@ -163,7 +163,7 @@ discover_files(root, config)
 for each file:
     read content
     extract_trigrams(content) ──> inverted[hash].push(file_id)
-    extract_sparse_ngrams(content) ──> inverted[hash].push(file_id)
+    extract_sparse_ngrams_all(content) ──> inverted[hash].push(file_id)
     drop content
     |
     v
@@ -192,8 +192,8 @@ decompose_pattern(pattern)
     v
 plan_query(pattern)
     trigram cost: 12.0 (12 lookups)
-    sparse cost: N/A (13 >= 12, no reduction)
-    selected: Trigram
+    sparse cost: 11.53 (13 lookups, longer grams)
+    selected: Sparse
     |
     v
 resolve_candidates(reader, plan)
@@ -233,6 +233,7 @@ index_search_with_overlay(reader, overlay, root, pattern)
     exclude deleted files from baseline
     merge candidate sets
     verify all candidates
+    emit timings: plan_ms / candidates_ms / verify_ms
     |
     v
 combined results (read-your-writes)

@@ -83,10 +83,11 @@ Options:
 
 Output format: `path:line:column: matched_text`
 
-When `--stats` is enabled, a summary line is printed:
+When `--stats` is enabled for indexed search, qndx collects and prints a summary plus stage timings:
 
 ```
 3 matches in 8 files (174185 bytes, 8 candidates / 722 total, 12 lookups, strategy: trigram) in 0.008s [indexed]
+  timing: open=3.412ms, plan=0.071ms, candidates=0.204ms, verify=4.033ms
 ```
 
 ### `qndx plan`

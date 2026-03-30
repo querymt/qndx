@@ -7,6 +7,7 @@
 //! 4. Returns only verified matches (no false negatives)
 
 use std::path::Path;
+use std::time::Instant;
 
 use qndx_core::scan::{SearchMatch, SearchResults};
 use qndx_index::{IndexReader, OverlayIndex};
@@ -30,6 +31,12 @@ pub struct IndexSearchStats {
     pub overlay_files: usize,
     /// Number of deleted files excluded from baseline.
     pub deleted_files: usize,
+    /// Time spent planning the query in milliseconds.
+    pub plan_time_ms: f64,
+    /// Time spent resolving candidate sets from postings in milliseconds.
+    pub candidate_time_ms: f64,
+    /// Time spent verifying candidate files with the full regex in milliseconds.
+    pub verify_time_ms: f64,
 }
 
 /// Result of an index-backed search including stats.
@@ -77,18 +84,38 @@ pub fn index_search_with_strategy(
     pattern: &str,
     strategy: StrategyOverride,
 ) -> Result<IndexSearchResults, String> {
+    index_search_with_strategy_and_timing(reader, root, pattern, strategy, false)
+}
+
+/// Run an index-backed search with an explicit strategy override and optional timing collection.
+pub fn index_search_with_strategy_and_timing(
+    reader: &IndexReader,
+    root: &Path,
+    pattern: &str,
+    strategy: StrategyOverride,
+    collect_timing: bool,
+) -> Result<IndexSearchResults, String> {
     let re = regex::Regex::new(pattern).map_err(|e| format!("invalid regex: {}", e))?;
 
     // Step 1: Plan the query (chooses trigram vs sparse strategy, or forced)
+    let plan_start = collect_timing.then(Instant::now);
     let plan = plan_query_with_strategy(pattern, strategy);
+    let plan_time_ms = plan_start
+        .map(|start| start.elapsed().as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
 
     // Step 2: Get candidate set from index using the plan's chosen hashes
+    let candidate_start = collect_timing.then(Instant::now);
     let candidates = resolve_candidates_from_plan(reader, &plan);
 
     let candidate_ids = candidates.to_vec();
     let candidate_count = candidate_ids.len();
+    let candidate_time_ms = candidate_start
+        .map(|start| start.elapsed().as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
 
     // Step 3: Verify candidates by reading actual file content
+    let verify_start = collect_timing.then(Instant::now);
     let mut all_matches = Vec::new();
     let mut files_scanned = 0usize;
     let mut bytes_scanned = 0u64;
@@ -110,15 +137,17 @@ pub fn index_search_with_strategy(
         bytes_scanned += content.len() as u64;
 
         let text = String::from_utf8_lossy(&content);
-        if re.is_match(&text) {
+        let file_matches = extract_matches(&re, rel_path, &text);
+        if !file_matches.is_empty() {
             verified_count += 1;
-            // Extract match positions
-            let file_matches = extract_matches(&re, rel_path, &text);
             all_matches.extend(file_matches);
         }
     }
 
     all_matches.sort();
+    let verify_time_ms = verify_start
+        .map(|start| start.elapsed().as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
 
     Ok(IndexSearchResults {
         results: SearchResults {
@@ -134,6 +163,9 @@ pub fn index_search_with_strategy(
             strategy: plan.strategy,
             overlay_files: 0,
             deleted_files: 0,
+            plan_time_ms,
+            candidate_time_ms,
+            verify_time_ms,
         },
     })
 }
@@ -286,12 +318,28 @@ pub fn index_search_with_overlay(
     root: &Path,
     pattern: &str,
 ) -> Result<IndexSearchResults, String> {
+    index_search_with_overlay_and_timing(reader, overlay, root, pattern, false)
+}
+
+/// Run an index-backed search with an overlay and optional timing collection.
+pub fn index_search_with_overlay_and_timing(
+    reader: &IndexReader,
+    overlay: &OverlayIndex,
+    root: &Path,
+    pattern: &str,
+    collect_timing: bool,
+) -> Result<IndexSearchResults, String> {
     let re = regex::Regex::new(pattern).map_err(|e| format!("invalid regex: {}", e))?;
 
     // Step 1: Plan the query (chooses trigram vs sparse strategy)
+    let plan_start = collect_timing.then(Instant::now);
     let plan = plan_query(pattern);
+    let plan_time_ms = plan_start
+        .map(|start| start.elapsed().as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
 
     // Step 2: Get candidate sets from both baseline and overlay
+    let candidate_start = collect_timing.then(Instant::now);
     let baseline_candidates = resolve_candidates_from_plan(reader, &plan);
     let overlay_candidates = resolve_candidates_from_plan_overlay(overlay, &plan);
 
@@ -313,8 +361,12 @@ pub fn index_search_with_overlay(
     }
 
     let candidate_count = all_candidate_ids.len();
+    let candidate_time_ms = candidate_start
+        .map(|start| start.elapsed().as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
 
     // Step 4: Verify candidates by reading actual file content
+    let verify_start = collect_timing.then(Instant::now);
     let mut all_matches = Vec::new();
     let mut files_scanned = 0usize;
     let mut bytes_scanned = 0u64;
@@ -343,15 +395,17 @@ pub fn index_search_with_overlay(
         bytes_scanned += content.len() as u64;
 
         let text = String::from_utf8_lossy(&content);
-        if re.is_match(&text) {
+        let file_matches = extract_matches(&re, &rel_path_str, &text);
+        if !file_matches.is_empty() {
             verified_count += 1;
-            // Extract match positions
-            let file_matches = extract_matches(&re, &rel_path_str, &text);
             all_matches.extend(file_matches);
         }
     }
 
     all_matches.sort();
+    let verify_time_ms = verify_start
+        .map(|start| start.elapsed().as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
 
     Ok(IndexSearchResults {
         results: SearchResults {
@@ -367,6 +421,9 @@ pub fn index_search_with_overlay(
             strategy: plan.strategy,
             overlay_files: overlay.file_count(),
             deleted_files: overlay.deleted_count(),
+            plan_time_ms,
+            candidate_time_ms,
+            verify_time_ms,
         },
     })
 }
@@ -650,6 +707,9 @@ mod tests {
 
         assert_eq!(result.stats.overlay_files, 0);
         assert_eq!(result.stats.deleted_files, 0);
+        assert!(result.stats.plan_time_ms >= 0.0);
+        assert!(result.stats.candidate_time_ms >= 0.0);
+        assert!(result.stats.verify_time_ms >= 0.0);
         assert!(!result.results.matches.is_empty());
     }
 

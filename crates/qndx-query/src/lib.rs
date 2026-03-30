@@ -12,6 +12,7 @@ pub use planner::{
     SelectivityEstimator, StrategyOverride,
 };
 pub use search::{
-    index_search, index_search_matching_files, index_search_with_overlay, index_search_with_reader,
-    index_search_with_strategy, IndexSearchResults, IndexSearchStats,
+    index_search, index_search_matching_files, index_search_with_overlay,
+    index_search_with_overlay_and_timing, index_search_with_reader, index_search_with_strategy,
+    index_search_with_strategy_and_timing, IndexSearchResults, IndexSearchStats,
 };

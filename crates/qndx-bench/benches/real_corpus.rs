@@ -199,11 +199,12 @@ fn bench_search_indexed(c: &mut Criterion, state: &BenchState) {
                 &pat.pattern,
                 |b, pattern| {
                     b.iter(|| {
-                        let result = qndx_query::index_search_with_strategy(
+                        let result = qndx_query::index_search_with_strategy_and_timing(
                             &state.reader,
                             black_box(&state.root),
                             black_box(pattern),
                             *strategy,
+                            false,
                         );
                         black_box(result).ok()
                     });
@@ -213,6 +214,78 @@ fn bench_search_indexed(c: &mut Criterion, state: &BenchState) {
 
         group.finish();
     }
+}
+
+// ---------------------------------------------------------------------------
+// Indexed search benchmarks (timing off vs on overhead)
+// ---------------------------------------------------------------------------
+
+fn bench_search_timing_overhead(c: &mut Criterion, state: &BenchState) {
+    let group_name = format!("real_{}/indexed/timing_overhead", state.corpus_name);
+    let mut group = c.benchmark_group(&group_name);
+    group.sample_size(20);
+    group.warm_up_time(std::time::Duration::from_secs(1));
+    group.measurement_time(std::time::Duration::from_secs(5));
+
+    for pat in &state.patterns {
+        group.bench_with_input(
+            BenchmarkId::new("timing_off", &pat.name),
+            &pat.pattern,
+            |b, pattern| {
+                b.iter(|| {
+                    let result = qndx_query::index_search_with_strategy_and_timing(
+                        &state.reader,
+                        black_box(&state.root),
+                        black_box(pattern),
+                        StrategyOverride::Auto,
+                        false,
+                    );
+                    black_box(result).ok()
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("timing_on", &pat.name),
+            &pat.pattern,
+            |b, pattern| {
+                b.iter(|| {
+                    let result = qndx_query::index_search_with_strategy_and_timing(
+                        &state.reader,
+                        black_box(&state.root),
+                        black_box(pattern),
+                        StrategyOverride::Auto,
+                        true,
+                    );
+                    black_box(result).ok()
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Index open benchmark (mmap + header/checksum validation)
+// ---------------------------------------------------------------------------
+
+fn bench_index_open(c: &mut Criterion, state: &BenchState) {
+    let group_name = format!("real_{}/index_open", state.corpus_name);
+    let mut group = c.benchmark_group(&group_name);
+    group.sample_size(10);
+    group.warm_up_time(std::time::Duration::from_secs(1));
+    group.measurement_time(std::time::Duration::from_secs(5));
+
+    let index_dir = state._temp_dir.path().join("index/v1");
+    group.bench_function("open", |b| {
+        b.iter(|| {
+            let reader = IndexReader::open(black_box(&index_dir));
+            black_box(reader).unwrap();
+        });
+    });
+
+    group.finish();
 }
 
 // ---------------------------------------------------------------------------
@@ -357,7 +430,9 @@ fn bench_real_corpus(c: &mut Criterion) {
 
     // Run benchmark groups
     bench_index_build(c, &state);
+    bench_index_open(c, &state);
     bench_search_indexed(c, &state);
+    bench_search_timing_overhead(c, &state);
     bench_search_scan(c, &state);
 
     // Print summary table
