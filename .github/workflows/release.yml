@@ -86,7 +86,7 @@ jobs:
             use_cross: true
             archive: tar.gz
             exe_suffix: ""
-          - os: macos-13
+          - os: macos-14
             target: x86_64-apple-darwin
             use_cross: false
             archive: tar.gz
@@ -140,7 +140,7 @@ jobs:
           TARGET="${{ matrix.target }}"
           ASSET="qndx-v${VERSION}-${TARGET}.tar.gz"
           mkdir -p dist
-          cp "target/${TARGET}/release/qndx" "dist/qndx"
+          cp "target/${TARGET}/release/qndx-cli" "dist/qndx"
           tar -C dist -czf "dist/${ASSET}" qndx
           rm -f dist/qndx
 
@@ -152,7 +152,7 @@ jobs:
           $target = "${{ matrix.target }}"
           $asset = "qndx-v$version-$target.zip"
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item "target/$target/release/qndx.exe" "dist/qndx.exe"
+          Copy-Item "target/$target/release/qndx-cli.exe" "dist/qndx.exe"
           Compress-Archive -Path "dist/qndx.exe" -DestinationPath "dist/$asset" -Force
           Remove-Item "dist/qndx.exe" -Force
 
