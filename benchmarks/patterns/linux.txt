@@ -12,8 +12,8 @@ WARN_ON	WARN_ON
 # Identifier patterns
 file_operations	struct file_operations
 kobject	struct kobject
-kfree	kfree(
-kmalloc	kmalloc(
+kfree	kfree\(
+kmalloc	kmalloc\(
 
 # Regex queries
 include_linux	#include.*<linux/
@@ -21,4 +21,4 @@ init_function	static int __init \w+
 module_param	module_param\w*\(
 printk_level	printk\(KERN_\w+
 ifdef_config	#ifdef CONFIG_\w+
-func_definition	^static (int|void|long) \w+\(
+func_definition	^static \(int|void|long\) \w+\(
