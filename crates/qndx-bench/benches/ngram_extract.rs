@@ -3,7 +3,7 @@
 //! Measures build cost for trigram and sparse n-gram extraction.
 //! Output: build throughput, grams produced, index-size estimate.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use qndx_bench::fixtures;
 use qndx_index::ngram::{
     extract_sparse_ngrams_all, extract_sparse_ngrams_covering, extract_trigrams,

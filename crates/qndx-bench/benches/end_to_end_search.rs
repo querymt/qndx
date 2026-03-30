@@ -4,10 +4,10 @@
 //! Output: end-to-end latency across query suites.
 //! Compares trigram-only vs planner-selected (potentially sparse) strategy.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use qndx_bench::fixtures;
 use qndx_index::ngram::{extract_sparse_ngrams_all, extract_trigrams};
-use qndx_query::planner::{plan_query, PlanStrategy};
+use qndx_query::planner::{PlanStrategy, plan_query};
 use qndx_query::verify::verify_candidates;
 use std::hint::black_box;
 

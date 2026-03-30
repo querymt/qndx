@@ -6,7 +6,7 @@
 //! This suite serves as the correctness oracle for all search paths.
 //! Index-backed search (M2+) must produce identical results.
 
-use qndx_core::scan::{scan_content, scan_search, SearchMatch};
+use qndx_core::scan::{SearchMatch, scan_content, scan_search};
 use qndx_core::walk::WalkConfig;
 use std::fs;
 

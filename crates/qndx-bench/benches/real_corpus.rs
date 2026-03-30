@@ -14,9 +14,9 @@
 //!   QNDX_BENCH_CORPUS=~/src/linux cargo bench --bench real_corpus
 //!   QNDX_BENCH_CORPUS=~/qmt/querymt QNDX_BENCH_PATTERNS=benchmarks/patterns/rust.txt cargo bench --bench real_corpus
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use qndx_bench::fixtures::{
-    self, corpus_bench_name, human_bytes, ExternalCorpusConfig, NamedPattern,
+    self, ExternalCorpusConfig, NamedPattern, corpus_bench_name, human_bytes,
 };
 use qndx_core::scan;
 use qndx_core::walk::WalkConfig;

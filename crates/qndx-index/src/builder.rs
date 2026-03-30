@@ -15,13 +15,13 @@ use std::io::BufWriter;
 use std::path::Path;
 
 use qndx_core::format::{
-    self, serialize_ngram_entry, FLAG_SPARSE, MAGIC_MANIFEST, MAGIC_NGRAMS, MAGIC_POSTINGS,
-    NGRAM_ENTRY_SIZE,
+    self, FLAG_SPARSE, MAGIC_MANIFEST, MAGIC_NGRAMS, MAGIC_POSTINGS, NGRAM_ENTRY_SIZE,
+    serialize_ngram_entry,
 };
 use qndx_core::{FileId, Manifest, NgramEntry, NgramHash};
 
 use crate::ngram::{extract_sparse_ngrams_all, extract_trigrams};
-use crate::postings::{PostingList, DEFAULT_HYBRID_THRESHOLD};
+use crate::postings::{DEFAULT_HYBRID_THRESHOLD, PostingList};
 
 /// Result of building an index.
 #[derive(Debug)]

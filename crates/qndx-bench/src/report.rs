@@ -94,14 +94,12 @@ fn collect_results(criterion_dir: &str) -> BenchReport {
                         let bench_path = bench_entry.path();
                         // Look for estimates.json in the "new" subdirectory
                         let estimates_path = bench_path.join("new").join("estimates.json");
-                        if estimates_path.exists() {
-                            if let Ok(content) = fs::read_to_string(&estimates_path) {
-                                if let Some(result) =
-                                    parse_criterion_estimates(&group_name, &bench_entry, &content)
-                                {
-                                    results.push(result);
-                                }
-                            }
+                        if estimates_path.exists()
+                            && let Ok(content) = fs::read_to_string(&estimates_path)
+                            && let Some(result) =
+                                parse_criterion_estimates(&group_name, &bench_entry, &content)
+                        {
+                            results.push(result);
                         }
                     }
                 }
@@ -460,11 +458,11 @@ fn collect_budgets(
     table: &toml::map::Map<String, toml::Value>,
 ) {
     // Check if this table itself is a budget entry (has "critical" key).
-    if table.contains_key("critical") {
-        if let Ok(budget) = Budget::deserialize(toml::Value::Table(table.clone())) {
-            out.insert(prefix.to_string(), budget);
-            return;
-        }
+    if table.contains_key("critical")
+        && let Ok(budget) = Budget::deserialize(toml::Value::Table(table.clone()))
+    {
+        out.insert(prefix.to_string(), budget);
+        return;
     }
 
     // Otherwise recurse into sub-tables.
@@ -531,13 +529,13 @@ fn parse_criterion_output(data: &str) -> Vec<BenchComparison> {
 
         // Format B: "change: [+3.87% +4.60% +5.33%]" -- all on one line.
         if trimmed.starts_with("change:") && trimmed.contains('[') {
-            if let Some(ref bench_name) = current_bench {
-                if let Some(pct) = extract_point_estimate(trimmed) {
-                    comparisons.push(BenchComparison {
-                        name: bench_name.clone(),
-                        change_pct: pct,
-                    });
-                }
+            if let Some(ref bench_name) = current_bench
+                && let Some(pct) = extract_point_estimate(trimmed)
+            {
+                comparisons.push(BenchComparison {
+                    name: bench_name.clone(),
+                    change_pct: pct,
+                });
             }
             saw_change_marker = false;
             continue;
@@ -551,13 +549,13 @@ fn parse_criterion_output(data: &str) -> Vec<BenchComparison> {
 
         // Format A continuation: the line after "change:" has the percentages.
         if saw_change_marker && trimmed.starts_with("time:") && trimmed.contains('%') {
-            if let Some(ref bench_name) = current_bench {
-                if let Some(pct) = extract_point_estimate(trimmed) {
-                    comparisons.push(BenchComparison {
-                        name: bench_name.clone(),
-                        change_pct: pct,
-                    });
-                }
+            if let Some(ref bench_name) = current_bench
+                && let Some(pct) = extract_point_estimate(trimmed)
+            {
+                comparisons.push(BenchComparison {
+                    name: bench_name.clone(),
+                    change_pct: pct,
+                });
             }
             saw_change_marker = false;
             continue;

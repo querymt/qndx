@@ -3,7 +3,7 @@
 //! Measures decomposition + lookup count estimation for both trigram and sparse strategies.
 //! Output: candidate set size, postings lookups, planning time, strategy selection.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use qndx_bench::fixtures;
 use qndx_query::planner::plan_query;
 use std::hint::black_box;

@@ -8,7 +8,7 @@
 
 use qndx_core::walk::WalkConfig;
 use qndx_git::GitRepo;
-use qndx_index::{build_index, IndexReader, OverlayIndex};
+use qndx_index::{IndexReader, OverlayIndex, build_index};
 use qndx_query::index_search_with_overlay;
 use std::fs;
 use std::process::Command;

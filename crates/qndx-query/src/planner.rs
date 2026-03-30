@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use qndx_core::NgramHash;
 
-use crate::decompose::{decompose_pattern, sparse_covering, Decomposition, SparseGram};
+use crate::decompose::{Decomposition, SparseGram, decompose_pattern, sparse_covering};
 
 /// Which n-gram strategy the planner selected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,27 +184,27 @@ pub fn plan_query_full(
         }
     };
 
-    if use_sparse {
-        if let (Some((sparse_cost, sparse_lookups)), Some((sparse_req, sparse_alts))) = (
+    if use_sparse
+        && let (Some((sparse_cost, sparse_lookups)), Some((sparse_req, sparse_alts))) = (
             sparse_score,
             materialize_sparse_hashes(
                 &sparse_required_covering,
                 &sparse_alt_coverings,
                 trigram_required.is_empty(),
             ),
-        ) {
-            return QueryPlan {
-                decomposition,
-                strategy: PlanStrategy::Sparse,
-                required_hashes: sparse_req,
-                alternative_hashes: sparse_alts,
-                lookup_count: sparse_lookups,
-                estimated_cost: sparse_cost,
-                estimated_candidates: 0,
-            };
-        }
-        // Safety fallback: if sparse materialization unexpectedly fails, use trigram.
+        )
+    {
+        return QueryPlan {
+            decomposition,
+            strategy: PlanStrategy::Sparse,
+            required_hashes: sparse_req,
+            alternative_hashes: sparse_alts,
+            lookup_count: sparse_lookups,
+            estimated_cost: sparse_cost,
+            estimated_candidates: 0,
+        };
     }
+    // Safety fallback: if sparse materialization unexpectedly fails, use trigram.
 
     make_trigram_plan(decomposition)
 }

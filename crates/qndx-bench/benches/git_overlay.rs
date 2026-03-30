@@ -6,7 +6,7 @@
 //! Note: this benchmark uses stub implementations for M0.
 //! Real gix integration will be added in M5.
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use qndx_git::{detect_dirty_files, head_commit};
 use std::hint::black_box;
 use std::path::Path;

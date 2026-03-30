@@ -13,9 +13,9 @@ use std::path::Path;
 
 use memmap2::Mmap;
 use qndx_core::format::{
-    self, deserialize_ngram_entry, payload_from_slice, validate_checksum_from_slice,
-    validate_header_from_slice, FormatError, FLAG_SPARSE, MAGIC_MANIFEST, MAGIC_NGRAMS,
-    MAGIC_POSTINGS, NGRAM_ENTRY_SIZE,
+    self, FLAG_SPARSE, FormatError, MAGIC_MANIFEST, MAGIC_NGRAMS, MAGIC_POSTINGS, NGRAM_ENTRY_SIZE,
+    deserialize_ngram_entry, payload_from_slice, validate_checksum_from_slice,
+    validate_header_from_slice,
 };
 use qndx_core::{FileId, Manifest, NgramHash};
 

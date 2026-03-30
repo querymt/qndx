@@ -12,10 +12,10 @@
 
 use std::io::Cursor;
 
+use qndx_core::FileId;
 use qndx_core::format::{
     decode_postings, decode_postings_varint, encode_postings, encode_postings_varint,
 };
-use qndx_core::FileId;
 use roaring::RoaringBitmap;
 
 /// Default threshold: posting lists with more than this many entries use Roaring.

@@ -2,9 +2,9 @@
 //!
 //! All generators use a fixed seed so results are reproducible across runs.
 
-use rand::rngs::ChaCha8Rng;
 use rand::RngExt;
 use rand::SeedableRng;
+use rand::rngs::ChaCha8Rng;
 
 /// Fixed seed for all fixture generation.
 const FIXTURE_SEED: u64 = 0xDEAD_BEEF_CAFE_1234;
@@ -526,10 +526,10 @@ pub fn discover_standard_corpora(
         };
 
         // Apply tier filter
-        if let Some(tier) = tier_filter {
-            if entry.tier != tier {
-                continue;
-            }
+        if let Some(tier) = tier_filter
+            && entry.tier != tier
+        {
+            continue;
         }
 
         let corpus_path = corpora_dir.join(name);

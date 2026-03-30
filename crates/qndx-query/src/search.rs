@@ -12,7 +12,7 @@ use std::time::Instant;
 use qndx_core::scan::{SearchMatch, SearchResults};
 use qndx_index::{IndexReader, OverlayIndex};
 
-use crate::planner::{plan_query, plan_query_with_strategy, QueryPlan, StrategyOverride};
+use crate::planner::{QueryPlan, StrategyOverride, plan_query, plan_query_with_strategy};
 
 /// Statistics from an index-backed search.
 #[derive(Debug, Clone)]
@@ -348,10 +348,10 @@ pub fn index_search_with_overlay_and_timing(
 
     // Add baseline candidates, excluding deleted files
     for &file_id in baseline_candidates.to_vec().iter() {
-        if let Some(rel_path) = reader.file_path(file_id) {
-            if !overlay.is_deleted(Path::new(rel_path)) {
-                all_candidate_ids.push((file_id, false)); // false = baseline
-            }
+        if let Some(rel_path) = reader.file_path(file_id)
+            && !overlay.is_deleted(Path::new(rel_path))
+        {
+            all_candidate_ids.push((file_id, false)); // false = baseline
         }
     }
 

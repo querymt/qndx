@@ -8,7 +8,7 @@
 
 use qndx_core::scan::{scan_matching_files, scan_search};
 use qndx_core::walk::WalkConfig;
-use qndx_index::{build_index, IndexReader};
+use qndx_index::{IndexReader, build_index};
 use qndx_query::index_search_matching_files;
 use std::collections::BTreeSet;
 use std::fs;

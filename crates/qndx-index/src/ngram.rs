@@ -16,7 +16,7 @@
 //! every qualifying substring, and the pair-weights of `L` within `F` are
 //! identical to those of `L` in isolation.
 
-use qndx_core::{hash_ngram, NgramHash};
+use qndx_core::{NgramHash, hash_ngram};
 
 /// Extract all overlapping trigrams from a byte slice.
 /// Returns a sorted, deduplicated list of trigram hashes.

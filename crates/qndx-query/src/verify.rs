@@ -14,11 +14,7 @@ pub fn verify_candidates(pattern: &str, candidates: &[(usize, &[u8])]) -> Vec<us
         .filter_map(|(id, content)| {
             // Search content as UTF-8 lossy
             let text = String::from_utf8_lossy(content);
-            if re.is_match(&text) {
-                Some(*id)
-            } else {
-                None
-            }
+            if re.is_match(&text) { Some(*id) } else { None }
         })
         .collect()
 }

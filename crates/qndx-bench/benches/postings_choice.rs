@@ -8,11 +8,11 @@
 //! - Choose hybrid when it is >=10% faster end-to-end query latency
 //!   than single-format options and memory/index size does not exceed budget.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use qndx_index::postings::PostingList;
-use rand::rngs::ChaCha8Rng;
 use rand::RngExt;
 use rand::SeedableRng;
+use rand::rngs::ChaCha8Rng;
 use std::hint::black_box;
 
 const SEED: u64 = 0xBEEF_CAFE_1234_5678;

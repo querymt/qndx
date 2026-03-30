@@ -3,10 +3,10 @@
 //! Uses proptest for randomized input coverage.
 
 use proptest::prelude::*;
+use qndx_core::FileId;
 use qndx_core::format::{
     decode_postings, decode_postings_varint, encode_postings, encode_postings_varint,
 };
-use qndx_core::FileId;
 use qndx_index::ngram::{
     extract_sparse_ngrams_all, extract_sparse_ngrams_covering, extract_trigrams,
 };
