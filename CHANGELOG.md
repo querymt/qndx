@@ -6,14 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added
-
-- README.md with quick start, CLI reference, architecture overview, and benchmarking guide
-- `docs/architecture.md` -- crate structure, data flow, and design rationale
-- `docs/file-format.md` -- on-disk index format specification (v1)
-- CHANGELOG.md
-
-## [0.1.0] - 2026-03-28
+## [0.1.0] - 2026-03-30
 
 Initial MVP release. Index-backed regex search with benchmark-driven architecture.
 
@@ -93,6 +86,24 @@ Initial MVP release. Index-backed regex search with benchmark-driven architectur
 - `build_index_from_dir()` reads files one at a time
 - Peak memory reduced from O(corpus) to O(largest_file) + O(inverted_index)
 - Build benchmark skipped for corpora exceeding 10K files
+
+#### Documentation
+- README.md with quick start, CLI reference, architecture overview, and benchmarking guide
+- `docs/architecture.md` -- crate structure, data flow, and design rationale
+- `docs/file-format.md` -- on-disk index format specification (v1)
+- CHANGELOG.md
+
+### Changed
+- CI workflow updated to actions/checkout v6, actions/cache v5, actions/upload-artifact v7, actions/github-script v8
+- Switched CI to self-hosted runners
+- Benchmark report generation refactored for improved output
+
+### Fixed
+- Benchmark regression regex patterns
+- Benchmark reports and PR CI workflow
+- `rand` crate upgrade to 0.10 compatibility
+- `toml` crate upgrade to v1 compatibility
+- `roaring` crate upgrade to 0.11 compatibility
 
 ### Architecture
 
