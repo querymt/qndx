@@ -214,7 +214,9 @@ fn make_manifest(file_count: u32) -> qndx_core::Manifest {
 // ---------------------------------------------------------------------------
 
 use qndx_core::walk::WalkConfig;
-use std::path::Path;
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 /// Configuration for loading an external corpus.
 pub struct ExternalCorpusConfig {
@@ -386,6 +388,216 @@ pub fn human_bytes(bytes: u64) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Standard corpora (corpora.toml) support
+// ---------------------------------------------------------------------------
+
+/// A single corpus entry from `benchmarks/corpora.toml`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CorpusEntry {
+    pub tier: String,
+    pub url: String,
+    pub description: String,
+    /// Relative path to the patterns file (from the repo root).
+    #[serde(default)]
+    pub patterns: String,
+    #[serde(default)]
+    pub approx_files: u64,
+    #[serde(default)]
+    pub approx_bytes: u64,
+}
+
+/// Defaults section from `benchmarks/corpora.toml`.
+#[derive(Debug, Clone, Deserialize)]
+struct CorporaDefaults {
+    #[serde(default)]
+    standard: Vec<String>,
+    #[serde(default = "default_max_file_size")]
+    max_file_size: u64,
+    #[serde(default)]
+    max_files: usize,
+}
+
+fn default_max_file_size() -> u64 {
+    1_048_576
+}
+
+impl Default for CorporaDefaults {
+    fn default() -> Self {
+        Self {
+            standard: vec!["rust".into(), "linux".into(), "kubernetes".into()],
+            max_file_size: default_max_file_size(),
+            max_files: 0,
+        }
+    }
+}
+
+/// Top-level structure of `benchmarks/corpora.toml`.
+#[derive(Debug, Clone, Deserialize)]
+struct CorporaConfig {
+    #[serde(default)]
+    corpora: HashMap<String, CorpusEntry>,
+    #[serde(default)]
+    defaults: CorporaDefaults,
+}
+
+/// A discovered standard corpus ready for benchmarking.
+#[derive(Debug, Clone)]
+pub struct StandardCorpus {
+    /// Short name (e.g. "rust", "linux").
+    pub name: String,
+    /// Corpus metadata from corpora.toml.
+    pub entry: CorpusEntry,
+    /// Absolute path to the downloaded corpus on disk.
+    pub path: PathBuf,
+    /// Absolute path to the patterns file (if it exists).
+    pub patterns_path: Option<PathBuf>,
+}
+
+/// Locate the project root by walking up from the current directory
+/// looking for `benchmarks/corpora.toml`.
+fn find_project_root() -> Option<PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        if dir.join("benchmarks/corpora.toml").is_file() {
+            return Some(dir);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+/// Load and parse `benchmarks/corpora.toml`.
+///
+/// Returns `None` if the file cannot be found or parsed.
+pub fn load_corpora_config() -> Option<(CorporaConfig, PathBuf)> {
+    let root = find_project_root()?;
+    let config_path = root.join("benchmarks/corpora.toml");
+    let content = std::fs::read_to_string(&config_path).ok()?;
+    let config: CorporaConfig = toml::from_str(&content).ok()?;
+    Some((config, root))
+}
+
+/// Discover all standard corpora that are downloaded and ready to benchmark.
+///
+/// Looks for corpora in `benchmarks/corpora/<name>/` under the project root.
+/// Only returns corpora that exist on disk and are listed in `corpora.toml`.
+///
+/// If `tier_filter` is `Some`, only corpora matching that tier are returned.
+/// If `names` is non-empty, only corpora with those names are returned.
+pub fn discover_standard_corpora(
+    tier_filter: Option<&str>,
+    names: &[String],
+) -> Vec<StandardCorpus> {
+    let (config, root) = match load_corpora_config() {
+        Some(v) => v,
+        None => {
+            eprintln!("warning: could not find benchmarks/corpora.toml");
+            return Vec::new();
+        }
+    };
+
+    let corpora_dir = std::env::var("QNDX_CORPORA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| root.join("benchmarks/corpora"));
+
+    let target_names: Vec<&str> = if !names.is_empty() {
+        names.iter().map(|s| s.as_str()).collect()
+    } else {
+        config.defaults.standard.iter().map(|s| s.as_str()).collect()
+    };
+
+    let mut found = Vec::new();
+
+    for name in &target_names {
+        let entry = match config.corpora.get(*name) {
+            Some(e) => e,
+            None => {
+                eprintln!("warning: corpus '{}' not found in corpora.toml", name);
+                continue;
+            }
+        };
+
+        // Apply tier filter
+        if let Some(tier) = tier_filter {
+            if entry.tier != tier {
+                continue;
+            }
+        }
+
+        let corpus_path = corpora_dir.join(name);
+        if !corpus_path.is_dir() {
+            eprintln!(
+                "warning: corpus '{}' not downloaded (expected at {})",
+                name,
+                corpus_path.display()
+            );
+            eprintln!("  hint: run ./benchmarks/fetch_corpora.sh {}", name);
+            continue;
+        }
+
+        let patterns_path = if !entry.patterns.is_empty() {
+            let p = root.join(&entry.patterns);
+            if p.is_file() {
+                Some(p)
+            } else {
+                eprintln!(
+                    "warning: patterns file not found for '{}': {}",
+                    name,
+                    p.display()
+                );
+                None
+            }
+        } else {
+            None
+        };
+
+        found.push(StandardCorpus {
+            name: name.to_string(),
+            entry: entry.clone(),
+            path: corpus_path,
+            patterns_path,
+        });
+    }
+
+    found
+}
+
+/// Get the default set of standard corpus names from corpora.toml.
+pub fn default_corpus_names() -> Vec<String> {
+    match load_corpora_config() {
+        Some((config, _)) => config.defaults.standard,
+        None => vec!["rust".into(), "linux".into(), "kubernetes".into()],
+    }
+}
+
+/// Load patterns for a standard corpus, merging generic benchmark patterns
+/// with corpus-specific patterns from the patterns file.
+pub fn patterns_for_corpus(corpus: &StandardCorpus) -> Vec<NamedPattern> {
+    let mut patterns: Vec<NamedPattern> = benchmark_patterns()
+        .into_iter()
+        .map(|(name, pat)| NamedPattern {
+            name: name.to_string(),
+            pattern: pat.to_string(),
+        })
+        .collect();
+
+    if let Some(ref path) = corpus.patterns_path {
+        let extra = load_patterns_file(path);
+        if !extra.is_empty() {
+            eprintln!(
+                "Loaded {} corpus-specific patterns from {}",
+                extra.len(),
+                path.display()
+            );
+        }
+        patterns.extend(extra);
+    }
+
+    patterns
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,6 +635,73 @@ mod tests {
     fn manifests_have_correct_file_counts() {
         for (_, m) in sample_manifests() {
             assert_eq!(m.files.len() as u32, m.file_count);
+        }
+    }
+
+    #[test]
+    fn parse_corpora_toml() {
+        let toml_str = r#"
+[corpora.rust]
+tier = "small"
+url = "https://github.com/rust-lang/rust.git"
+description = "Rust compiler"
+patterns = "benchmarks/patterns/rust.txt"
+approx_files = 35000
+approx_bytes = 500000000
+
+[corpora.linux]
+tier = "medium"
+url = "https://github.com/torvalds/linux.git"
+description = "Linux kernel"
+patterns = "benchmarks/patterns/linux.txt"
+
+[defaults]
+standard = ["rust", "linux"]
+max_file_size = 1048576
+max_files = 0
+"#;
+        let config: CorporaConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.corpora.len(), 2);
+        assert!(config.corpora.contains_key("rust"));
+        assert!(config.corpora.contains_key("linux"));
+        assert_eq!(config.corpora["rust"].tier, "small");
+        assert_eq!(config.corpora["linux"].tier, "medium");
+        assert_eq!(config.defaults.standard, vec!["rust", "linux"]);
+        assert_eq!(config.defaults.max_file_size, 1_048_576);
+    }
+
+    #[test]
+    fn corpora_config_defaults() {
+        let toml_str = r#"
+[corpora.test]
+tier = "small"
+url = "https://example.com/test.git"
+description = "Test"
+"#;
+        let config: CorporaConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.corpora["test"].patterns, "");
+        assert_eq!(config.corpora["test"].approx_files, 0);
+        assert_eq!(config.defaults.max_file_size, 1_048_576);
+    }
+
+    #[test]
+    fn load_corpora_config_from_project() {
+        // This test succeeds when run from the project root (cargo test).
+        // It may be skipped if running from a different directory.
+        if let Some((config, root)) = load_corpora_config() {
+            assert!(!config.corpora.is_empty(), "corpora.toml should have entries");
+            assert!(
+                root.join("benchmarks/corpora.toml").is_file(),
+                "project root should contain corpora.toml"
+            );
+            // Verify all standard names are defined
+            for name in &config.defaults.standard {
+                assert!(
+                    config.corpora.contains_key(name),
+                    "standard corpus '{}' should be defined in [corpora]",
+                    name
+                );
+            }
         }
     }
 }

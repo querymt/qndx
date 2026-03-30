@@ -1,0 +1,74 @@
+# Standard Benchmark Corpora
+#
+# Defines the canonical set of real-world codebases used for qndx benchmarking.
+# Each corpus has a tier, source URL, and associated pattern file.
+#
+# Tiers:
+#   small   — Fast iteration (< 1 GB, < 40K files). Always run locally.
+#   medium  — Standard evaluation (1-2 GB, 15K-75K files). Run on CI and locally.
+#   large   — Stress testing (> 2 GB, 100K+ files). Run on-demand only.
+#
+# The fetch_corpora.sh script reads this file indirectly (definitions are
+# mirrored there for shell simplicity). This file is the source of truth
+# for Rust code that auto-discovers corpora.
+
+# ============================================================================
+# Small Tier
+# ============================================================================
+
+[corpora.rust]
+tier = "small"
+url = "https://github.com/rust-lang/rust.git"
+description = "Rust compiler and standard library"
+patterns = "benchmarks/patterns/rust.txt"
+approx_files = 35_000
+approx_bytes = 500_000_000  # ~500 MB
+
+# ============================================================================
+# Medium Tier
+# ============================================================================
+
+[corpora.linux]
+tier = "medium"
+url = "https://github.com/torvalds/linux.git"
+description = "Linux kernel"
+patterns = "benchmarks/patterns/linux.txt"
+approx_files = 75_000
+approx_bytes = 1_200_000_000  # ~1.2 GB
+
+[corpora.kubernetes]
+tier = "medium"
+url = "https://github.com/kubernetes/kubernetes.git"
+description = "Kubernetes container orchestrator"
+patterns = "benchmarks/patterns/kubernetes.txt"
+approx_files = 15_000
+approx_bytes = 200_000_000  # ~200 MB
+
+# ============================================================================
+# Large Tier
+# ============================================================================
+
+[corpora.chromium]
+tier = "large"
+url = "https://chromium.googlesource.com/chromium/src.git"
+description = "Chromium browser"
+patterns = ""  # no corpus-specific patterns yet
+approx_files = 400_000
+approx_bytes = 20_000_000_000  # ~20 GB
+
+# ============================================================================
+# Benchmark Defaults
+# ============================================================================
+
+[defaults]
+# Default corpora to benchmark when running run_standard_benches.sh
+# without explicit arguments. Excludes large tier by default.
+standard = ["rust", "linux", "kubernetes"]
+
+# Maximum file size (bytes) when benchmarking. Files larger than this are
+# skipped during corpus loading.
+max_file_size = 1_048_576  # 1 MB
+
+# Maximum files to load per corpus (0 = unlimited).
+# Useful for quick smoke tests.
+max_files = 0

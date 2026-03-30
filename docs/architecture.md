@@ -116,11 +116,41 @@ The search command auto-detects the index (looks for `.qndx/index/v1/ngrams.tbl`
 
 Benchmark infrastructure.
 
-- **Fixtures** (`fixtures.rs`): Deterministic synthetic corpus generation (seeded RNG). Three sizes: small (50 files), medium (200), large (1000). Also: external corpus loader, pattern file parser, and helpers for real-corpus benchmarks.
+- **Fixtures** (`fixtures.rs`): Deterministic synthetic corpus generation (seeded RNG). Three sizes: small (50 files), medium (200), large (1000). Also: external corpus loader, pattern file parser, standard corpus discovery from `benchmarks/corpora.toml`, and helpers for real-corpus benchmarks.
 
 - **Report** (`report.rs`): Parses Criterion output, generates human-readable and JSON reports, checks performance budgets from `benchmarks/budgets.toml`.
 
 - **Bench targets**: `serializer_choice`, `postings_choice`, `ngram_extract`, `query_planner`, `end_to_end_search`, `git_overlay`, `real_corpus`.
+
+#### Standard benchmark corpora
+
+Real-world benchmarking uses a tiered set of well-known open-source repositories defined in `benchmarks/corpora.toml`. Each corpus has a tier, associated patterns file, and is downloaded via `benchmarks/fetch_corpora.sh`.
+
+| Tier | Corpus | Files | Size | Language | Use case |
+|------|--------|-------|------|----------|----------|
+| small | `rust` (rust-lang/rust) | ~35K | ~500 MB | Rust | Fast local iteration |
+| medium | `linux` (torvalds/linux) | ~75K | ~1.2 GB | C | Industry-standard grep benchmark |
+| medium | `kubernetes` (kubernetes/kubernetes) | ~15K | ~200 MB | Go | Multi-language coverage |
+| large | `chromium` (chromium/src) | ~400K | ~20 GB | C++ | Stress testing |
+
+These are the same corpora used by Zoekt, ripgrep, and other code-search tools, making results directly comparable.
+
+**Quick start:**
+
+```bash
+# Download standard corpora (excludes large tier by default)
+./benchmarks/fetch_corpora.sh
+
+# Run benchmarks against all downloaded corpora
+./benchmarks/run_standard_benches.sh
+
+# Run against a single corpus
+QNDX_BENCH_CORPUS=benchmarks/corpora/linux \
+QNDX_BENCH_PATTERNS=benchmarks/patterns/linux.txt \
+cargo bench --bench real_corpus
+```
+
+Corpus-specific patterns live in `benchmarks/patterns/<name>.txt` and are merged with the generic benchmark patterns at runtime. See `benchmarks/corpora.toml` for the full configuration.
 
 ## Data flow
 

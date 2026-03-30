@@ -165,6 +165,61 @@ jobs:
             });
 
   # ================================================================
+  # Real-corpus benchmark run (on-demand)
+  # ================================================================
+  real-corpus-benchmark:
+    name: Real Corpus Benchmarks
+    runs-on: [self-hosted, freebsd]
+    if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 180
+
+    strategy:
+      fail-fast: false
+      matrix:
+        corpus: [rust, linux, kubernetes]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Cache corpus (${{ matrix.corpus }})
+        id: cache-corpus
+        uses: actions/cache@v5
+        with:
+          path: benchmarks/corpora/${{ matrix.corpus }}
+          key: corpus-${{ matrix.corpus }}-v1
+
+      - name: Download corpus (${{ matrix.corpus }})
+        if: steps.cache-corpus.outputs.cache-hit != 'true'
+        run: ./benchmarks/fetch_corpora.sh ${{ matrix.corpus }}
+
+      - name: Set date
+        run: echo "BENCH_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
+
+      - name: Run real_corpus benchmark (${{ matrix.corpus }})
+        env:
+          QNDX_BENCH_CORPUS: benchmarks/corpora/${{ matrix.corpus }}
+          QNDX_BENCH_NAME: ${{ matrix.corpus }}
+          QNDX_BENCH_PATTERNS: benchmarks/patterns/${{ matrix.corpus }}.txt
+        run: |
+          cargo bench -p qndx-bench --bench real_corpus -- \
+            --save-baseline "real-${{ matrix.corpus }}-$BENCH_DATE"
+
+      - name: Upload results (${{ matrix.corpus }})
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: real-corpus-${{ matrix.corpus }}-${{ env.BENCH_DATE }}
+          path: target/criterion/
+          retention-days: 365
+
+  # ================================================================
   # Nightly comprehensive benchmark run for trend tracking
   # ================================================================
   nightly-benchmark:

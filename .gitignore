@@ -1,5 +1,6 @@
 /target
 /benchmarks/results/
+/benchmarks/corpora/
 *.swp
 *.swo
 .DS_Store

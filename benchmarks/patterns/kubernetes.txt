@@ -1,0 +1,38 @@
+# Kubernetes codebase benchmark patterns (Go)
+# Format: name<TAB>pattern  (or just pattern on its own line)
+
+# Literal queries
+func_main	func main()
+package_main	package main
+fmt_Errorf	fmt.Errorf
+klog_Info	klog.Info
+context_TODO	context.TODO()
+
+# Identifier patterns
+interface_def	type \w+ interface
+struct_def	type \w+ struct
+error_return	return .*, err
+defer_stmt	defer \w+
+go_routine	go \w+\(
+
+# Kubernetes-specific patterns
+api_group	GroupVersion{
+client_go	client-go
+informer	Informer
+reconcile	Reconcile
+admission	admission
+controller	controller\.
+runtime_Object	runtime\.Object
+api_resource	APIResource
+kubeconfig	kubeconfig
+kubectl	kubectl
+
+# Regex queries
+func_definition	^func \w+\(
+method_definition	^func \(\w+ \*?\w+\) \w+
+import_block	^import \(
+test_func	^func Test\w+
+build_tag	//go:build
+error_wrap	fmt\.Errorf\(.*%w
+channel_op	<-\w+
+select_block	select {
