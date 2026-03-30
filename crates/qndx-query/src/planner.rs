@@ -157,8 +157,8 @@ pub fn plan_query_full(
         .map(|sp| sparse_covering(sp))
         .collect();
 
-    // Evaluate sparse cost (only if all parts have coverage)
-    let sparse_plan = build_sparse_plan(
+    // Evaluate sparse score (cost + lookup count) without allocating sparse hash vectors.
+    let sparse_score = score_sparse_plan(
         &sparse_required_covering,
         &sparse_alt_coverings,
         trigram_required.is_empty(),
@@ -175,40 +175,38 @@ pub fn plan_query_full(
         estimated_candidates: 0,
     };
 
-    match strategy_override {
-        StrategyOverride::ForceTrigram => make_trigram_plan(decomposition),
-        StrategyOverride::ForceSparse => {
-            // Force sparse; fall back to trigram only if sparse covering is unavailable
-            match sparse_plan {
-                Some((sparse_req, sparse_alts, sparse_cost, sparse_lookups)) => QueryPlan {
-                    decomposition,
-                    strategy: PlanStrategy::Sparse,
-                    required_hashes: sparse_req,
-                    alternative_hashes: sparse_alts,
-                    lookup_count: sparse_lookups,
-                    estimated_cost: sparse_cost,
-                    estimated_candidates: 0,
-                },
-                None => make_trigram_plan(decomposition),
-            }
+    // Decide strategy from score first; materialize sparse hashes only if selected.
+    let use_sparse = match strategy_override {
+        StrategyOverride::ForceTrigram => false,
+        StrategyOverride::ForceSparse => sparse_score.is_some(),
+        StrategyOverride::Auto => {
+            matches!(sparse_score, Some((sparse_cost, _)) if sparse_cost < trigram_cost)
         }
-        StrategyOverride::Auto => match sparse_plan {
-            Some((sparse_req, sparse_alts, sparse_cost, sparse_lookups))
-                if sparse_cost < trigram_cost =>
-            {
-                QueryPlan {
-                    decomposition,
-                    strategy: PlanStrategy::Sparse,
-                    required_hashes: sparse_req,
-                    alternative_hashes: sparse_alts,
-                    lookup_count: sparse_lookups,
-                    estimated_cost: sparse_cost,
-                    estimated_candidates: 0,
-                }
-            }
-            _ => make_trigram_plan(decomposition),
-        },
+    };
+
+    if use_sparse {
+        if let (Some((sparse_cost, sparse_lookups)), Some((sparse_req, sparse_alts))) = (
+            sparse_score,
+            materialize_sparse_hashes(
+                &sparse_required_covering,
+                &sparse_alt_coverings,
+                trigram_required.is_empty(),
+            ),
+        ) {
+            return QueryPlan {
+                decomposition,
+                strategy: PlanStrategy::Sparse,
+                required_hashes: sparse_req,
+                alternative_hashes: sparse_alts,
+                lookup_count: sparse_lookups,
+                estimated_cost: sparse_cost,
+                estimated_candidates: 0,
+            };
+        }
+        // Safety fallback: if sparse materialization unexpectedly fails, use trigram.
     }
+
+    make_trigram_plan(decomposition)
 }
 
 /// Diagnostic details about both strategies for a pattern.
@@ -261,15 +259,15 @@ pub fn plan_diagnostics_with_strategy(
         .iter()
         .map(|sp| sparse_covering(sp))
         .collect();
-    let sparse_plan = build_sparse_plan(
+    let sparse_score = score_sparse_plan(
         &sparse_required_covering,
         &sparse_alt_coverings,
         trigram_required.is_empty(),
         &estimator,
     );
 
-    let (sparse_lookups, sparse_cost) = match &sparse_plan {
-        Some((_, _, cost, lookups)) => (Some(*lookups), Some(*cost)),
+    let (sparse_lookups, sparse_cost) = match sparse_score {
+        Some((cost, lookups)) => (Some(lookups), Some(cost)),
         None => (None, None),
     };
 
@@ -288,54 +286,84 @@ pub fn plan_diagnostics_with_strategy(
     }
 }
 
-/// Return type of [`build_sparse_plan`]: `(required_hashes, alt_hash_sets, cost, lookup_count)`.
-type SparsePlanResult = Option<(Vec<NgramHash>, Vec<Vec<NgramHash>>, f64, usize)>;
+/// Sparse score tuple: `(estimated_cost, lookup_count)`.
+type SparseScore = Option<(f64, usize)>;
 
-/// Try to build a sparse plan. Returns None if sparse coverage is incomplete.
-fn build_sparse_plan(
+/// Sparse hash materialization tuple: `(required_hashes, alt_hash_sets)`.
+type SparseHashes = Option<(Vec<NgramHash>, Vec<Vec<NgramHash>>)>;
+
+/// Compute sparse plan score (cost + lookup count) without allocating hash vectors.
+/// Returns None if sparse coverage is incomplete.
+fn score_sparse_plan(
     sparse_req: &Option<Vec<SparseGram>>,
     sparse_alts: &[Option<Vec<SparseGram>>],
     no_required: bool,
     estimator: &dyn SelectivityEstimator,
-) -> SparsePlanResult {
-    let req_hashes: Vec<NgramHash>;
+) -> SparseScore {
+    let req_count: usize;
     let mut cost: f64;
 
     if no_required {
-        // No required part — only alternatives
-        req_hashes = Vec::new();
+        req_count = 0;
         cost = 0.0;
     } else {
         match sparse_req {
             Some(covering) => {
-                req_hashes = covering.iter().map(|g| g.hash).collect();
+                req_count = covering.len();
                 cost = covering
                     .iter()
                     .map(|g| estimator.estimate(g.hash, g.gram_len))
                     .sum();
             }
-            None => return None, // Sparse doesn't cover required part
+            None => return None,
         }
     }
+
+    let mut alt_count = 0usize;
+    for alt in sparse_alts {
+        match alt {
+            Some(covering) => {
+                alt_count += covering.len();
+                cost += covering
+                    .iter()
+                    .map(|g| estimator.estimate(g.hash, g.gram_len))
+                    .sum::<f64>();
+            }
+            None => return None,
+        }
+    }
+
+    Some((cost, req_count + alt_count))
+}
+
+/// Materialize sparse hashes once sparse strategy has been selected.
+/// Returns None if sparse coverage is incomplete.
+fn materialize_sparse_hashes(
+    sparse_req: &Option<Vec<SparseGram>>,
+    sparse_alts: &[Option<Vec<SparseGram>>],
+    no_required: bool,
+) -> SparseHashes {
+    let req_hashes = if no_required {
+        Vec::new()
+    } else {
+        match sparse_req {
+            Some(covering) => covering.iter().map(|g| g.hash).collect(),
+            None => return None,
+        }
+    };
 
     let mut alt_hashes = Vec::new();
     for alt in sparse_alts {
         match alt {
             Some(covering) => {
                 let hashes: Vec<NgramHash> = covering.iter().map(|g| g.hash).collect();
-                cost += covering
-                    .iter()
-                    .map(|g| estimator.estimate(g.hash, g.gram_len))
-                    .sum::<f64>();
                 alt_hashes.push(hashes);
             }
-            None => return None, // Sparse doesn't cover this branch
+            None => return None,
         }
     }
 
-    let lookups = req_hashes.len() + alt_hashes.iter().map(|a| a.len()).sum::<usize>();
-
-    Some((req_hashes, alt_hashes, cost, lookups))
+    Some((req_hashes, alt_hashes))
 }
 
 #[cfg(test)]
