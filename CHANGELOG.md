@@ -17,6 +17,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Incremental update result reporting in `qndx-index` via `IncrementalResult` and `update_index_from_dir()`.
 - Test coverage for nested untracked detection and changes-since-base behavior in `qndx-git`.
 - Test coverage for incremental skip/rebuild behavior in `qndx-index`.
+- `qndx stats` subcommand: displays index statistics including n-gram distribution (trigram-only, sparse) and posting list distribution (mean, median, P95, P99, max size, and count of large lists).
 
 ### Changed
 - Hashing backend migrated to rapidhash:
