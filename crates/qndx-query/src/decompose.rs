@@ -104,7 +104,7 @@ pub fn decompose_pattern(pattern: &str) -> Decomposition {
 /// - Otherwise, return the extracted sparse covering as-is.
 ///
 /// This provides a robust pre-filter while the planner applies a richer cost model.
-const MAX_SPARSE_LOOKUP_OVERAGE: usize = 0;
+const MAX_SPARSE_LOOKUP_OVERAGE: usize = 1;
 
 pub fn sparse_covering(sparse: &[SparseGram], trigram_count: usize) -> Option<Vec<SparseGram>> {
     if sparse.is_empty() {
