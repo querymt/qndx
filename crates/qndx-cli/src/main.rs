@@ -81,6 +81,7 @@ enum Commands {
         strategy: StrategyArg,
     },
     /// Benchmark operations
+    #[cfg(feature = "bench-tools")]
     Bench {
         #[command(subcommand)]
         action: BenchAction,
@@ -108,6 +109,7 @@ impl From<StrategyArg> for StrategyOverride {
     }
 }
 
+#[cfg(feature = "bench-tools")]
 #[derive(Subcommand)]
 enum BenchAction {
     /// Generate a benchmark report
@@ -131,6 +133,358 @@ enum BenchAction {
         #[arg(long, default_value = "true")]
         fail_on_critical: bool,
     },
+}
+
+#[cfg(feature = "bench-tools")]
+mod bench_tools {
+    use serde::{Deserialize, Serialize};
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::Path;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    struct BenchResult {
+        group: String,
+        name: String,
+        mean_ns: f64,
+        std_dev_ns: f64,
+        throughput_mb_s: Option<f64>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    struct BenchReport {
+        timestamp: String,
+        results: Vec<BenchResult>,
+    }
+
+    pub fn generate_report(criterion_dir: &str, format: &str) {
+        let report = collect_results(criterion_dir);
+        match format {
+            "json" => {
+                let json = serde_json::to_string_pretty(&report).unwrap();
+                println!("{}", json);
+                let out_dir = Path::new("benchmarks/results");
+                if fs::create_dir_all(out_dir).is_ok() {
+                    let path = out_dir.join("latest.json");
+                    let _ = fs::write(&path, &json);
+                    eprintln!("Report saved to {}", path.display());
+                }
+            }
+            _ => {
+                println!("=== qndx Benchmark Report ===");
+                println!("Timestamp: {}", report.timestamp);
+                println!();
+                if report.results.is_empty() {
+                    println!("No benchmark results found in '{}'.", criterion_dir);
+                    println!("Run `cargo bench` first to generate results.");
+                    return;
+                }
+                let mut current_group = String::new();
+                for r in &report.results {
+                    if r.group != current_group {
+                        println!("--- {} ---", r.group);
+                        current_group = r.group.clone();
+                    }
+                    print!("  {:<40} {:>12.2} ns", r.name, r.mean_ns);
+                    if let Some(tp) = r.throughput_mb_s {
+                        print!("  ({:.1} MB/s)", tp);
+                    }
+                    println!("  +/- {:.2} ns", r.std_dev_ns);
+                }
+                println!();
+                println!("Total benchmarks: {}", report.results.len());
+            }
+        }
+    }
+
+    pub fn check_performance_budgets(
+        comparison_path: Option<&Path>,
+        budgets_path: &Path,
+        _fail_on_critical: bool,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let budgets_content = fs::read_to_string(budgets_path)?;
+        let config: BudgetsConfig = toml::from_str(&budgets_content)?;
+        let budgets = parse_budget_entries(&config.groups)?;
+
+        let comparison_data = match comparison_path {
+            Some(path) => fs::read_to_string(path)?,
+            None => {
+                return Err(
+                    "no comparison file provided (pass --comparison bench-output.txt)".into(),
+                );
+            }
+        };
+
+        let comparisons = parse_criterion_output(&comparison_data);
+        let mut critical_violations = 0;
+
+        for comp in &comparisons {
+            if comp.change_pct <= 0.0 {
+                continue;
+            }
+            if let Some(key) = map_bench_name(&comp.name, &config.mapping)
+                && let Some(budget) = budgets.get(&key)
+            {
+                let threshold = budget.threshold();
+                if comp.change_pct > threshold {
+                    if budget.is_critical() {
+                        critical_violations += 1;
+                    }
+                    eprintln!(
+                        "{} {:.1}% > {:.1}% {} -> {}",
+                        if budget.is_critical() { "FAIL" } else { "WARN" },
+                        comp.change_pct,
+                        threshold,
+                        comp.name,
+                        key
+                    );
+                }
+            }
+        }
+
+        if critical_violations > 0 && config.ci.fail_on_critical {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    fn collect_results(criterion_dir: &str) -> BenchReport {
+        let base = Path::new(criterion_dir);
+        let mut results = Vec::new();
+        if base.exists()
+            && let Ok(groups) = fs::read_dir(base)
+        {
+            for group_entry in groups.flatten() {
+                let group_path = group_entry.path();
+                if !group_path.is_dir() {
+                    continue;
+                }
+                let group_name = group_entry.file_name().to_string_lossy().into_owned();
+                if group_name.starts_with('.') || group_name == "report" {
+                    continue;
+                }
+                if let Ok(benches) = fs::read_dir(&group_path) {
+                    for bench_entry in benches.flatten() {
+                        let estimates_path = bench_entry.path().join("new").join("estimates.json");
+                        if estimates_path.exists()
+                            && let Ok(content) = fs::read_to_string(&estimates_path)
+                            && let Some(result) =
+                                parse_criterion_estimates(&group_name, &bench_entry, &content)
+                        {
+                            results.push(result);
+                        }
+                    }
+                }
+            }
+        }
+        results.sort_by(|a, b| (&a.group, &a.name).cmp(&(&b.group, &b.name)));
+        BenchReport {
+            timestamp: chrono_stub(),
+            results,
+        }
+    }
+
+    fn parse_criterion_estimates(
+        group: &str,
+        bench_entry: &fs::DirEntry,
+        content: &str,
+    ) -> Option<BenchResult> {
+        let v: serde_json::Value = serde_json::from_str(content).ok()?;
+        Some(BenchResult {
+            group: group.to_string(),
+            name: bench_entry.file_name().to_string_lossy().into_owned(),
+            mean_ns: v.get("mean")?.get("point_estimate")?.as_f64()?,
+            std_dev_ns: v.get("std_dev")?.get("point_estimate")?.as_f64()?,
+            throughput_mb_s: None,
+        })
+    }
+
+    fn chrono_stub() -> String {
+        let duration = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        format!("unix:{}", duration.as_secs())
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
+    struct Budget {
+        regression_pct: Option<f64>,
+        p50_regression_pct: Option<f64>,
+        throughput_regression_pct: Option<f64>,
+        critical: Option<bool>,
+    }
+
+    impl Budget {
+        fn threshold(&self) -> f64 {
+            self.regression_pct
+                .or(self.p50_regression_pct)
+                .or(self.throughput_regression_pct)
+                .unwrap_or(20.0)
+        }
+        fn is_critical(&self) -> bool {
+            self.critical.unwrap_or(false)
+        }
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct BudgetsConfig {
+        #[serde(default)]
+        mapping: HashMap<String, String>,
+        #[serde(default)]
+        ci: CiConfig,
+        #[serde(flatten)]
+        groups: HashMap<String, toml::Value>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct CiConfig {
+        #[serde(default = "default_true")]
+        fail_on_critical: bool,
+    }
+
+    fn default_true() -> bool {
+        true
+    }
+
+    #[derive(Debug, Clone)]
+    struct BenchComparison {
+        name: String,
+        change_pct: f64,
+    }
+
+    fn parse_budget_entries(
+        groups: &HashMap<String, toml::Value>,
+    ) -> Result<HashMap<String, Budget>, Box<dyn std::error::Error>> {
+        let mut budgets = HashMap::new();
+        for (group_name, group_value) in groups {
+            if let toml::Value::Table(table) = group_value {
+                collect_budgets(&mut budgets, group_name, table);
+            }
+        }
+        Ok(budgets)
+    }
+
+    fn collect_budgets(
+        out: &mut HashMap<String, Budget>,
+        prefix: &str,
+        table: &toml::map::Map<String, toml::Value>,
+    ) {
+        if table.contains_key("critical")
+            && let Ok(budget) = Budget::deserialize(toml::Value::Table(table.clone()))
+        {
+            out.insert(prefix.to_string(), budget);
+            return;
+        }
+        for (key, value) in table {
+            if let toml::Value::Table(sub) = value {
+                let child_key = format!("{}.{}", prefix, key);
+                collect_budgets(out, &child_key, sub);
+            }
+        }
+    }
+
+    fn parse_criterion_output(data: &str) -> Vec<BenchComparison> {
+        let mut comparisons = Vec::new();
+        let lines: Vec<&str> = data.lines().collect();
+        let mut current_bench: Option<String> = None;
+        let mut saw_change_marker = false;
+
+        for line in lines {
+            let trimmed = line.trim();
+            if !trimmed.is_empty()
+                && !trimmed.starts_with("time:")
+                && !trimmed.starts_with("change:")
+                && !trimmed.starts_with("thrpt:")
+                && !trimmed.starts_with("Performance")
+                && !trimmed.starts_with("Benchmarking")
+                && !trimmed.starts_with("Found")
+                && !trimmed.starts_with("Warning")
+                && trimmed.contains('/')
+            {
+                let name = trimmed.split_whitespace().next().unwrap_or(trimmed);
+                if name.contains('/') {
+                    current_bench = Some(name.to_string());
+                    saw_change_marker = false;
+                }
+            }
+
+            if trimmed.starts_with("change:") && trimmed.contains('[') {
+                if let Some(ref bench_name) = current_bench
+                    && let Some(pct) = extract_point_estimate(trimmed)
+                {
+                    comparisons.push(BenchComparison {
+                        name: bench_name.clone(),
+                        change_pct: pct,
+                    });
+                }
+                saw_change_marker = false;
+                continue;
+            }
+
+            if trimmed == "change:" {
+                saw_change_marker = true;
+                continue;
+            }
+
+            if saw_change_marker && trimmed.starts_with("time:") && trimmed.contains('%') {
+                if let Some(ref bench_name) = current_bench
+                    && let Some(pct) = extract_point_estimate(trimmed)
+                {
+                    comparisons.push(BenchComparison {
+                        name: bench_name.clone(),
+                        change_pct: pct,
+                    });
+                }
+                saw_change_marker = false;
+            }
+        }
+
+        comparisons
+    }
+
+    fn extract_point_estimate(line: &str) -> Option<f64> {
+        let start = line.find('[')?;
+        let end = line.find(']')?;
+        let parts: Vec<&str> = line[start + 1..end].split_whitespace().collect();
+        if parts.len() >= 3 {
+            return parts[1].trim_end_matches('%').parse::<f64>().ok();
+        }
+        None
+    }
+
+    fn map_bench_name(bench_name: &str, mapping: &HashMap<String, String>) -> Option<String> {
+        for (pattern, budget_key) in mapping {
+            if glob_match(pattern, bench_name) {
+                return Some(budget_key.clone());
+            }
+        }
+        None
+    }
+
+    fn glob_match(pattern: &str, name: &str) -> bool {
+        let pat_parts: Vec<&str> = pattern.split('/').collect();
+        let name_parts: Vec<&str> = name.split('/').collect();
+        if pat_parts.len() != name_parts.len() {
+            return false;
+        }
+        pat_parts
+            .iter()
+            .zip(name_parts.iter())
+            .all(|(p, n)| segment_match(p, n))
+    }
+
+    fn segment_match(pattern: &str, segment: &str) -> bool {
+        if pattern == "*" {
+            return true;
+        }
+        if let Some(prefix) = pattern.strip_suffix('*') {
+            return segment.starts_with(prefix);
+        }
+        if let Some(suffix) = pattern.strip_prefix('*') {
+            return segment.ends_with(suffix);
+        }
+        pattern == segment
+    }
 }
 
 fn main() {
@@ -278,19 +632,20 @@ fn main() {
             println!("Lookups:   {}", diag.selected.lookup_count);
             println!("Cost:      {:.2}", diag.selected.estimated_cost);
         }
+        #[cfg(feature = "bench-tools")]
         Commands::Bench { action } => match action {
             BenchAction::Report {
                 format,
                 criterion_dir,
             } => {
-                qndx_bench::report::generate_report(&criterion_dir, &format);
+                bench_tools::generate_report(&criterion_dir, &format);
             }
             BenchAction::CheckBudgets {
                 comparison,
                 budgets,
                 fail_on_critical,
             } => {
-                match qndx_bench::report::check_performance_budgets(
+                match bench_tools::check_performance_budgets(
                     comparison.as_deref(),
                     &budgets,
                     fail_on_critical,

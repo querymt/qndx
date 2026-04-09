@@ -119,13 +119,13 @@ Lookups:   12
 Cost:      12.00
 ```
 
-### `qndx bench`
+### `qndx bench` (feature-gated)
 
-Benchmark reporting and budget checking (see [Benchmarking](#benchmarking)).
+Benchmark reporting and budget checking (see [Benchmarking](#benchmarking)). This command is available only when `qndx-cli` is built with the `bench-tools` feature.
 
-```
-qndx bench report [--format human|json] [--criterion-dir target/criterion]
-qndx bench check-budgets [--budgets benchmarks/budgets.toml] [--fail-on-critical]
+```bash
+cargo run -p qndx-cli --features bench-tools -- bench report
+cargo run -p qndx-cli --features bench-tools -- bench check-budgets
 ```
 
 ## Architecture

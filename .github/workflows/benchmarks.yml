@@ -97,7 +97,7 @@ jobs:
       - name: Check performance budgets
         if: github.event_name == 'pull_request' && steps.restore-baseline.outputs.cache-hit == 'true'
         run: |
-          cargo run -p qndx-cli -- bench check-budgets \
+          cargo run -p qndx-cli --features bench-tools -- bench check-budgets \
             --comparison bench-output.txt \
             --budgets benchmarks/budgets.toml
 

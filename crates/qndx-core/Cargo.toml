@@ -3,6 +3,8 @@ name = "qndx-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Shared types, file format definitions, hashing, and IDs for qndx"
 
 [dependencies]
@@ -14,5 +16,3 @@ regex = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-qndx-index = { workspace = true }
-qndx-query = { workspace = true }

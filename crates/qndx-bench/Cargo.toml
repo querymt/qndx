@@ -3,6 +3,8 @@ name = "qndx-bench"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Shared bench fixtures and utilities for qndx"
 
 [dependencies]

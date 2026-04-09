@@ -10,17 +10,19 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
+repository = "https://github.com/querymt/qndx"
+homepage = "https://github.com/querymt/qndx"
 
 [workspace.dependencies]
 # Internal crates
-qndx-core = { path = "crates/qndx-core" }
-qndx-index = { path = "crates/qndx-index" }
-qndx-query = { path = "crates/qndx-query" }
-qndx-git = { path = "crates/qndx-git" }
-qndx-bench = { path = "crates/qndx-bench" }
+qndx-core = { path = "crates/qndx-core", version = "0.1.1" }
+qndx-index = { path = "crates/qndx-index", version = "0.1.1" }
+qndx-query = { path = "crates/qndx-query", version = "0.1.1" }
+qndx-git = { path = "crates/qndx-git", version = "0.1.1" }
+qndx-bench = { path = "crates/qndx-bench", version = "0.1.1" }
 
 # Benchmark framework
 criterion = { version = "0.8", features = ["html_reports"] }
