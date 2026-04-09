@@ -52,7 +52,14 @@ The index reader uses memory-mapped I/O (`memmap2`), so query-time resident memo
 
 ### `qndx index`
 
-Build the search index for a directory.
+Build or update the search index for a directory.
+
+Behavior:
+- If no index exists, qndx performs a full build.
+- If an index exists and contains a Git `base_commit`, qndx checks for changes since that commit.
+- If no changes are detected, qndx exits without rebuilding.
+- If changes are detected, qndx rebuilds the index and records the new base commit.
+- If more than 50% of files changed, qndx reports a forced full rebuild.
 
 ```
 qndx index [OPTIONS]
@@ -63,6 +70,7 @@ Options:
       --max-file-size <MAX_FILE_SIZE>  Maximum file size in bytes [default: 1048576]
       --hidden                         Include hidden files
       --binary                         Include binary files
+      --full                           Force a full rebuild (disable incremental update)
 ```
 
 ### `qndx search`
@@ -173,7 +181,7 @@ The index is stored in three files under `.qndx/index/v1/`:
 | `postings.dat` | `QXPO` | Concatenated posting blocks (tagged: varint-delta for small lists, Roaring for large) |
 | `manifest.bin` | `QXMF` | Metadata and file paths (postcard-serialized) |
 
-Each file has a 20-byte header: 4-byte magic, u32 version, u64 payload length, u32 CRC32 checksum.
+Each file has a 24-byte header: 4-byte magic, u32 version, u64 payload length, u64 rapidhash-v3 checksum.
 
 See [docs/file-format.md](docs/file-format.md) for the full specification.
 

@@ -1,6 +1,6 @@
 # Index File Format Specification
 
-Version: 1
+Version: 2
 
 This document describes the on-disk format of qndx index files. All multi-byte integers are little-endian.
 
@@ -16,23 +16,23 @@ The index consists of three files stored in `.qndx/index/v1/`:
 
 ## Common file header
 
-Every index file starts with a 20-byte header:
+Every index file starts with a 24-byte header:
 
 ```
 Offset  Size  Type    Field
 ------  ----  ----    -----
 0       4     [u8;4]  Magic bytes (identifies file type)
-4       4     u32     Format version (currently 1)
+4       4     u32     Format version (currently 2)
 8       8     u64     Payload length in bytes
-16      4     u32     CRC32 checksum of payload
+16      8     u64     rapidhash-v3 checksum of payload
 ```
 
-The checksum covers only the payload bytes (everything after the header). It uses the CRC32 algorithm from the `crc32fast` crate (IEEE polynomial).
+The checksum covers only the payload bytes (everything after the header).
 
 Readers must:
 1. Verify magic bytes match the expected file type
 2. Reject versions greater than the supported maximum
-3. Validate the CRC32 checksum against the payload
+3. Validate the rapidhash-v3 checksum against the payload
 
 ## ngrams.tbl
 
@@ -43,7 +43,7 @@ The payload is a sequence of fixed-size n-gram entries, sorted by hash value. Bi
 ```
 Offset  Size  Type  Field
 ------  ----  ----  -----
-0       4     u32   N-gram hash (CRC32 of the n-gram bytes)
+0       4     u32   N-gram hash (rapidhash-v3 of n-gram bytes, truncated to u32)
 4       8     u64   Byte offset into postings.dat payload
 12      4     u32   Length of the posting block in bytes
 16      4     u32   Flags
@@ -60,13 +60,12 @@ The table is sorted by the `hash` field. Entries with the same hash from differe
 
 ### Hash function
 
-N-gram hashes are computed using CRC32 (IEEE polynomial) over the raw n-gram bytes:
+N-gram hashes are computed using rapidhash-v3 over the raw n-gram bytes,
+truncated to `u32` for on-disk compatibility:
 
 ```rust
 pub fn hash_ngram(gram: &[u8]) -> u32 {
-    let mut hasher = crc32fast::Hasher::new();
-    hasher.update(gram);
-    hasher.finalize()
+    rapidhash::v3::rapidhash_v3(gram) as u32
 }
 ```
 
@@ -144,18 +143,18 @@ The payload is a [postcard](https://crates.io/crates/postcard)-serialized `Manif
 
 ```rust
 struct Manifest {
-    version: u32,           // Format version (1)
-    file_count: u32,        // Number of indexed files
-    ngram_count: u32,       // Number of unique n-grams
-    postings_bytes: u64,    // Total size of postings data
-    base_commit: Option<String>,  // Git commit hash (hex) or None
-    files: Vec<String>,     // File paths in index order (FileId = index)
+    version: u32,                // Format version (2)
+    file_count: u32,             // Number of indexed files
+    ngram_count: u32,            // Number of unique n-grams
+    postings_bytes: u64,         // Total size of postings data
+    base_commit: Option<String>, // Git commit hash (hex) or None
+    files: Vec<String>,          // File paths in index order (FileId = index)
 }
 ```
 
 The `files` vector maps `FileId` (u32 index) to relative file paths. File IDs are assigned sequentially during the build in sorted path order.
 
-`base_commit` records the Git HEAD commit at index time (if the indexed directory is a Git repository). This is used by the freshness model to detect which files have changed since the index was built.
+`base_commit` records the Git HEAD commit at index time (if the indexed directory is a Git repository). `qndx index` uses this to detect changes since the previous build and skip rebuilding when the index is up to date.
 
 ## File ID assignment
 
@@ -174,7 +173,7 @@ This ordering is deterministic: the same set of files always produces the same I
 
 The `version` field in the file header enables forward compatibility:
 
-- **Version 1** (current): The format described in this document.
+- **Version 2** (current): 24-byte headers with rapidhash-v3 payload checksums.
 - Readers must reject files with `version > FORMAT_VERSION`.
 - Writers always use the current `FORMAT_VERSION`.
 
@@ -182,7 +181,7 @@ When the format changes:
 - Increment `FORMAT_VERSION`
 - Document the new version in this file
 - Old indexes must be rebuilt (`qndx index` rewrites all files)
-- No incremental migration is supported in the MVP
+- `qndx index` supports incremental update checks using `Manifest.base_commit`; if no changes are detected since the base commit, rebuild is skipped.
 
 ## Size characteristics
 
@@ -199,7 +198,7 @@ The majority of index size comes from sparse n-grams. Trigram-only indexes are s
 
 - **Magic bytes**: Prevent opening wrong file types
 - **Version check**: Prevent reading incompatible formats
-- **CRC32 checksum**: Detect corruption (computed over entire payload)
+- **rapidhash-v3 checksum**: Detect corruption (computed over entire payload)
 - **Payload length**: Cross-checked against actual file size at open time
 
 The reader validates all four properties when opening an index. Any mismatch results in an error -- the reader never returns silently incorrect results from a corrupted index.

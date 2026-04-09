@@ -7,8 +7,8 @@
 //! - End-to-end extraction pipeline throughput
 
 use ahash::AHasher;
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use crc32fast::Hasher as Crc32Hasher;
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use qndx_bench::fixtures;
 use std::hash::Hasher;
 use std::hint::black_box;
@@ -121,15 +121,19 @@ fn bench_pair_weight_micro(c: &mut Criterion) {
     group.throughput(Throughput::Elements(pairs.len() as u64));
 
     for hash_impl in hash_candidates() {
-        group.bench_with_input(BenchmarkId::new(hash_impl.name(), "batch"), &pairs, |b, ps| {
-            b.iter(|| {
-                let mut acc = 0u32;
-                for p in ps {
-                    acc ^= hash_impl.hash32(black_box(p));
-                }
-                black_box(acc)
-            })
-        });
+        group.bench_with_input(
+            BenchmarkId::new(hash_impl.name(), "batch"),
+            &pairs,
+            |b, ps| {
+                b.iter(|| {
+                    let mut acc = 0u32;
+                    for p in ps {
+                        acc ^= hash_impl.hash32(black_box(p));
+                    }
+                    black_box(acc)
+                })
+            },
+        );
     }
 
     group.finish();

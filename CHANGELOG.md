@@ -6,6 +6,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-09
+
+### Added
+- Incremental index update path: `qndx index` now checks for Git changes since `Manifest.base_commit` and skips rebuild when up to date.
+- New `--full` option on `qndx index` to force a full rebuild.
+- `qndx-git` APIs for incremental workflows:
+  - `GitRepo::detect_changes_since(base_commit)`
+  - `GitRepo::commit_exists(rev)`
+- Incremental update result reporting in `qndx-index` via `IncrementalResult` and `update_index_from_dir()`.
+- Test coverage for nested untracked detection and changes-since-base behavior in `qndx-git`.
+- Test coverage for incremental skip/rebuild behavior in `qndx-index`.
+
+### Changed
+- Hashing backend migrated to rapidhash:
+  - file payload integrity checksum now uses rapidhash-v3 (`u64`) in file headers
+  - n-gram hashing now uses rapidhash-v3 truncated to `u32` for on-disk compatibility
+- Index file format updated to version `2` with a 24-byte header (`magic + version + payload_len + u64 checksum`).
+- `qndx-git::detect_dirty_files()` now uses Git porcelain output instead of mtime/size heuristics, improving correctness for modified/added/deleted/untracked detection.
+- `qndx index` now persists HEAD commit in the manifest when indexing a Git repository and reuses it for incremental checks.
+- Documentation updated for incremental indexing behavior and `--full` usage.
+
+### Documentation
+- Updated index format and architecture docs to match current implementation and `qndx-git` APIs.
+
 ## [0.1.2] - 2026-04-09
 
 ### Changed

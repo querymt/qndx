@@ -5,8 +5,8 @@
 //! - Detect modified/untracked/deleted files in working tree
 //! - Handle read-your-writes semantics for local edits
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 use thiserror::Error;
 
 /// Status of a file relative to the indexed commit.
@@ -64,89 +64,47 @@ impl GitRepo {
 
     /// Detect dirty (modified/added/deleted) files in the working tree.
     /// Returns relative paths from the repository root and their status.
-    ///
-    /// This compares the working tree against the index (staging area).
-    /// Files are considered dirty if they differ from what's in the index.
     pub fn detect_dirty_files(&self) -> Result<Vec<(PathBuf, FileStatus)>, GitError> {
-        let mut dirty_files = Vec::new();
+        let mut changes = self.git_status_porcelain()?;
+        changes.sort_by(|a, b| a.0.cmp(&b.0));
+        changes.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+        Ok(changes)
+    }
 
-        // Get the index (staging area)
-        let index = self
-            .repo
-            .index()
-            .map_err(|e| GitError::OperationFailed(format!("failed to read index: {}", e)))?;
-
-        // Build a set of tracked files from the index
-        let mut tracked_files: HashSet<PathBuf> = HashSet::new();
-        for entry in index.entries() {
-            let path_bytes = entry.path(&index);
-            let path = PathBuf::from(String::from_utf8_lossy(path_bytes.as_ref()).to_string());
-            tracked_files.insert(path);
+    /// Detect changed files since a base commit.
+    ///
+    /// Includes committed history changes, staged/unstaged worktree edits,
+    /// and untracked files.
+    pub fn detect_changes_since(
+        &self,
+        base_commit: &str,
+    ) -> Result<Vec<(PathBuf, FileStatus)>, GitError> {
+        if !self.commit_exists(base_commit)? {
+            return Err(GitError::InvalidReference(format!(
+                "base commit not found: {}",
+                base_commit
+            )));
         }
 
-        // Use gix status to detect changes
-        let workdir = self.repo.workdir().ok_or_else(|| {
-            GitError::OperationFailed("repository has no working directory".to_string())
-        })?;
-
-        // Check for modified and deleted files by comparing index with working tree
-        for entry in index.entries() {
-            let path_bytes = entry.path(&index);
-            let rel_path = PathBuf::from(String::from_utf8_lossy(path_bytes.as_ref()).to_string());
-            let abs_path = workdir.join(&rel_path);
-
-            if !abs_path.exists() {
-                // File is in index but not in working tree: deleted
-                dirty_files.push((rel_path.clone(), FileStatus::Deleted));
-            } else {
-                // File exists: check if modified
-                if let Ok(metadata) = abs_path.metadata() {
-                    // Simple check: compare mtime and size
-                    // Note: This is a heuristic. A proper implementation would hash content.
-                    let entry_mtime_secs = entry.stat.mtime.secs as u64;
-                    let file_mtime_secs = metadata
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-
-                    let entry_size = entry.stat.size;
-                    let file_size = metadata.len();
-
-                    // If mtime or size differs, consider it modified
-                    // (This is a simplification; real git compares content hashes)
-                    if file_mtime_secs != entry_mtime_secs || file_size != entry_size as u64 {
-                        // For more accuracy, we could hash the file content and compare with entry.id
-                        dirty_files.push((rel_path.clone(), FileStatus::Modified));
-                    }
-                }
-            }
+        let mut changes = self.git_diff_name_status(base_commit)?;
+        for path in self.git_ls_untracked()? {
+            changes.push((path, FileStatus::Added));
         }
 
-        // Check for untracked files (files in working tree but not in index)
-        // Walk the working directory and find files not in tracked_files set
-        if let Ok(entries) = std::fs::read_dir(workdir) {
-            for entry in entries.flatten() {
-                if let Ok(file_type) = entry.file_type() {
-                    let abs_path = entry.path();
-                    if let Ok(rel_path) = abs_path.strip_prefix(workdir) {
-                        let rel_path_buf = rel_path.to_path_buf();
+        changes.sort_by(|a, b| a.0.cmp(&b.0));
+        changes.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+        Ok(changes)
+    }
 
-                        // Skip .git directory
-                        if rel_path_buf.starts_with(".git") {
-                            continue;
-                        }
-
-                        if file_type.is_file() && !tracked_files.contains(&rel_path_buf) {
-                            dirty_files.push((rel_path_buf, FileStatus::Added));
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(dirty_files)
+    /// Check if a commit exists in this repository.
+    pub fn commit_exists(&self, rev: &str) -> Result<bool, GitError> {
+        let output = self.run_git([
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{}^{{commit}}", rev),
+        ])?;
+        Ok(output.status.success())
     }
 
     /// Get the commit hash for a specific reference (e.g., "HEAD", "main", a SHA).
@@ -175,6 +133,134 @@ impl GitRepo {
     pub fn root_path(&self) -> Option<&Path> {
         self.repo.workdir()
     }
+
+    fn run_git<I, S>(&self, args: I) -> Result<Output, GitError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let workdir = self.repo.workdir().ok_or_else(|| {
+            GitError::OperationFailed("repository has no working directory".to_string())
+        })?;
+
+        let mut cmd = Command::new("git");
+        for arg in args {
+            cmd.arg(arg.as_ref());
+        }
+
+        cmd.current_dir(workdir).output().map_err(GitError::Io)
+    }
+
+    fn git_status_porcelain(&self) -> Result<Vec<(PathBuf, FileStatus)>, GitError> {
+        let output = self.run_git(["status", "--porcelain", "--untracked-files=all"])?;
+        if !output.status.success() {
+            return Err(GitError::OperationFailed(
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ));
+        }
+
+        Ok(parse_status_porcelain(&String::from_utf8_lossy(
+            &output.stdout,
+        )))
+    }
+
+    fn git_diff_name_status(
+        &self,
+        base_commit: &str,
+    ) -> Result<Vec<(PathBuf, FileStatus)>, GitError> {
+        let output = self.run_git(["diff", "--name-status", "--no-renames", base_commit, "--"])?;
+        if !output.status.success() {
+            return Err(GitError::OperationFailed(
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut changes = Vec::new();
+
+        for line in stdout.lines() {
+            if line.is_empty() {
+                continue;
+            }
+            let mut parts = line.split_whitespace();
+            let status = parts.next().unwrap_or_default();
+            let path = parts.next().unwrap_or_default();
+            if path.is_empty() {
+                continue;
+            }
+
+            let mapped = match status.chars().next().unwrap_or('M') {
+                'A' => FileStatus::Added,
+                'D' => FileStatus::Deleted,
+                _ => FileStatus::Modified,
+            };
+            changes.push((PathBuf::from(path), mapped));
+        }
+
+        Ok(changes)
+    }
+
+    fn git_ls_untracked(&self) -> Result<Vec<PathBuf>, GitError> {
+        let output = self.run_git(["ls-files", "--others", "--exclude-standard"])?;
+        if !output.status.success() {
+            return Err(GitError::OperationFailed(
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut paths = Vec::new();
+        for line in stdout.lines() {
+            if !line.is_empty() {
+                paths.push(PathBuf::from(line));
+            }
+        }
+        Ok(paths)
+    }
+}
+
+fn parse_status_porcelain(stdout: &str) -> Vec<(PathBuf, FileStatus)> {
+    let mut changes = Vec::new();
+
+    for line in stdout.lines() {
+        if line.len() < 3 {
+            continue;
+        }
+
+        let code = &line[..2];
+        let path_part = &line[3..];
+
+        if code == "??" {
+            changes.push((PathBuf::from(path_part), FileStatus::Added));
+            continue;
+        }
+
+        if path_part.contains(" -> ") {
+            let mut parts = path_part.splitn(2, " -> ");
+            if let Some(old_path) = parts.next()
+                && !old_path.is_empty()
+            {
+                changes.push((PathBuf::from(old_path), FileStatus::Deleted));
+            }
+            if let Some(new_path) = parts.next()
+                && !new_path.is_empty()
+            {
+                changes.push((PathBuf::from(new_path), FileStatus::Added));
+            }
+            continue;
+        }
+
+        let status = if code.contains('D') {
+            FileStatus::Deleted
+        } else if code.contains('A') {
+            FileStatus::Added
+        } else {
+            FileStatus::Modified
+        };
+        changes.push((PathBuf::from(path_part), status));
+    }
+
+    changes
 }
 
 /// Convenience function: detect dirty files in a repository at the given path.
@@ -312,5 +398,54 @@ mod tests {
             .filter(|(_, status)| matches!(status, FileStatus::Deleted))
             .collect();
         assert!(!deleted_files.is_empty());
+    }
+
+    #[test]
+    fn test_detect_untracked_nested_file() {
+        let dir = setup_test_repo();
+        fs::create_dir_all(dir.path().join("nested/deep")).unwrap();
+        fs::write(dir.path().join("nested/deep/new.txt"), "new file").unwrap();
+
+        let dirty = detect_dirty_files(dir.path()).unwrap();
+        assert!(dirty.iter().any(|(p, s)| {
+            p == &PathBuf::from("nested/deep/new.txt") && matches!(s, FileStatus::Added)
+        }));
+    }
+
+    #[test]
+    fn test_detect_changes_since_commit() {
+        let dir = setup_test_repo();
+        let repo = GitRepo::open(dir.path()).unwrap();
+        let base = repo.head_commit().unwrap();
+
+        fs::write(dir.path().join("file1.txt"), "changed").unwrap();
+        fs::write(dir.path().join("file3.txt"), "new").unwrap();
+        fs::remove_file(dir.path().join("file2.txt")).unwrap();
+
+        let changes = repo.detect_changes_since(&base).unwrap();
+
+        assert!(changes
+            .iter()
+            .any(|(p, s)| p == &PathBuf::from("file1.txt") && matches!(s, FileStatus::Modified)));
+        assert!(
+            changes
+                .iter()
+                .any(|(p, s)| p == &PathBuf::from("file2.txt") && matches!(s, FileStatus::Deleted))
+        );
+        assert!(
+            changes
+                .iter()
+                .any(|(p, s)| p == &PathBuf::from("file3.txt") && matches!(s, FileStatus::Added))
+        );
+    }
+
+    #[test]
+    fn test_commit_exists() {
+        let dir = setup_test_repo();
+        let repo = GitRepo::open(dir.path()).unwrap();
+        let base = repo.head_commit().unwrap();
+
+        assert!(repo.commit_exists(&base).unwrap());
+        assert!(!repo.commit_exists("deadbeef").unwrap());
     }
 }
