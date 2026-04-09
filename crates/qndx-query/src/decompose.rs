@@ -105,21 +105,22 @@ pub fn decompose_pattern(pattern: &str) -> Decomposition {
     }
 }
 
-/// Select a sparse covering set from available sparse n-grams.
+/// Select a sparse covering candidate set from available sparse n-grams.
 ///
-/// Given a list of sparse n-grams (each covering some byte span of the literal),
-/// returns all of them as a valid covering if any exist. The planner's cost model
-/// decides whether sparse or trigram is cheaper — this function no longer
-/// pre-filters on count, so longer (more selective) grams get a fair comparison.
+/// We keep this deterministic and conservative:
+/// - If no sparse grams exist, return `None`.
+/// - If sparse requires substantially more lookups than trigrams, return `None`.
+/// - Otherwise, return the extracted sparse covering as-is.
 ///
-/// Returns None only when no sparse grams are available at all.
-///
-/// TODO: Add smarter covering-set selection here (e.g. drop grams whose
-/// cost exceeds a threshold, or greedily prune to a minimal covering).
-/// The subset invariant (covering ⊆ build_all) is now guaranteed by
-/// `extract_sparse_ngrams_all` at index time.
-pub fn sparse_covering(sparse: &[SparseGram]) -> Option<Vec<SparseGram>> {
+/// This provides a robust pre-filter while the planner applies a richer cost model.
+const MAX_SPARSE_LOOKUP_OVERAGE: usize = 0;
+
+pub fn sparse_covering(sparse: &[SparseGram], trigram_count: usize) -> Option<Vec<SparseGram>> {
     if sparse.is_empty() {
+        return None;
+    }
+
+    if trigram_count > 0 && sparse.len() > trigram_count + MAX_SPARSE_LOOKUP_OVERAGE {
         return None;
     }
 
@@ -321,5 +322,30 @@ mod tests {
         assert!(d.alternatives[0].is_empty());
         // "parse_config" should have trigrams
         assert!(!d.alternatives[1].is_empty());
+    }
+
+    #[test]
+    fn sparse_covering_rejects_large_overage() {
+        let sparse = vec![
+            SparseGram {
+                hash: 1,
+                gram_len: 3,
+            },
+            SparseGram {
+                hash: 2,
+                gram_len: 3,
+            },
+            SparseGram {
+                hash: 3,
+                gram_len: 3,
+            },
+            SparseGram {
+                hash: 4,
+                gram_len: 3,
+            },
+        ];
+        assert!(sparse_covering(&sparse, 2).is_none());
+        assert!(sparse_covering(&sparse, 3).is_none());
+        assert!(sparse_covering(&sparse, 4).is_some());
     }
 }

@@ -126,6 +126,30 @@ pub fn plan_query_with_estimator(pattern: &str, estimator: &dyn SelectivityEstim
     plan_query_full(pattern, estimator, StrategyOverride::Auto)
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PlannerWeights {
+    lookup_penalty: f64,
+    branch_penalty: f64,
+}
+
+impl Default for PlannerWeights {
+    fn default() -> Self {
+        Self {
+            // Fixed per-lookup overhead (postings reads + set operations).
+            lookup_penalty: 0.12,
+            // Mild penalty per alternation branch to avoid over-fragmented sparse plans.
+            branch_penalty: 0.08,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PlanScore {
+    selectivity_cost: f64,
+    lookup_count: usize,
+    total_cost: f64,
+}
+
 /// Full query planning with both estimator and strategy override.
 pub fn plan_query_full(
     pattern: &str,
@@ -149,20 +173,33 @@ pub fn plan_query_full(
             .map(|&h| estimator.estimate(h, 3))
             .sum::<f64>();
 
+    let weights = PlannerWeights::default();
+
+    let trigram_score = score_plan(
+        trigram_cost,
+        trigram_lookup_count,
+        trigram_alternatives.len(),
+        &weights,
+    );
+
     // --- Build sparse plan ---
-    let sparse_required_covering = sparse_covering(&decomposition.sparse_required);
+    let sparse_required_covering =
+        sparse_covering(&decomposition.sparse_required, trigram_required.len());
     let sparse_alt_coverings: Vec<Option<Vec<SparseGram>>> = decomposition
         .sparse_alternatives
         .iter()
-        .map(|sp| sparse_covering(sp))
+        .zip(trigram_alternatives.iter())
+        .map(|(sp, tri)| sparse_covering(sp, tri.len()))
         .collect();
 
-    // Evaluate sparse score (cost + lookup count) without allocating sparse hash vectors.
+    // Evaluate sparse score (selectivity + lookup/branch overhead) without allocating sparse hash vectors.
     let sparse_score = score_sparse_plan(
         &sparse_required_covering,
         &sparse_alt_coverings,
         trigram_required.is_empty(),
         estimator,
+        decomposition.sparse_alternatives.len(),
+        &weights,
     );
 
     let make_trigram_plan = |decomposition: Decomposition| QueryPlan {
@@ -171,21 +208,21 @@ pub fn plan_query_full(
         required_hashes: trigram_required.clone(),
         alternative_hashes: trigram_alternatives.clone(),
         lookup_count: trigram_lookup_count,
-        estimated_cost: trigram_cost,
+        estimated_cost: trigram_score.total_cost,
         estimated_candidates: 0,
     };
 
-    // Decide strategy from score first; materialize sparse hashes only if selected.
+    // Decide strategy from modeled total score first; materialize sparse hashes only if selected.
     let use_sparse = match strategy_override {
         StrategyOverride::ForceTrigram => false,
         StrategyOverride::ForceSparse => sparse_score.is_some(),
         StrategyOverride::Auto => {
-            matches!(sparse_score, Some((sparse_cost, _)) if sparse_cost < trigram_cost)
+            matches!(sparse_score, Some(score) if score.total_cost < trigram_score.total_cost)
         }
     };
 
     if use_sparse
-        && let (Some((sparse_cost, sparse_lookups)), Some((sparse_req, sparse_alts))) = (
+        && let (Some(sparse), Some((sparse_req, sparse_alts))) = (
             sparse_score,
             materialize_sparse_hashes(
                 &sparse_required_covering,
@@ -199,8 +236,8 @@ pub fn plan_query_full(
             strategy: PlanStrategy::Sparse,
             required_hashes: sparse_req,
             alternative_hashes: sparse_alts,
-            lookup_count: sparse_lookups,
-            estimated_cost: sparse_cost,
+            lookup_count: sparse.lookup_count,
+            estimated_cost: sparse.total_cost,
             estimated_candidates: 0,
         };
     }
@@ -217,9 +254,11 @@ pub struct PlanDiagnostics {
     /// Trigram strategy details.
     pub trigram_lookups: usize,
     pub trigram_cost: f64,
+    pub trigram_selectivity_cost: f64,
     /// Sparse strategy details (None if sparse covering is unavailable).
     pub sparse_lookups: Option<usize>,
     pub sparse_cost: Option<f64>,
+    pub sparse_selectivity_cost: Option<f64>,
     /// Literal segments extracted from the pattern.
     pub literals: Vec<String>,
 }
@@ -252,23 +291,39 @@ pub fn plan_diagnostics_with_strategy(
             .map(|&h| estimator.estimate(h, 3))
             .sum::<f64>();
 
+    let weights = PlannerWeights::default();
+    let trigram_score = score_plan(
+        trigram_cost,
+        trigram_lookups,
+        trigram_alternatives.len(),
+        &weights,
+    );
+
     // Sparse plan
-    let sparse_required_covering = sparse_covering(&decomposition.sparse_required);
+    let sparse_required_covering =
+        sparse_covering(&decomposition.sparse_required, trigram_required.len());
     let sparse_alt_coverings: Vec<Option<Vec<SparseGram>>> = decomposition
         .sparse_alternatives
         .iter()
-        .map(|sp| sparse_covering(sp))
+        .zip(trigram_alternatives.iter())
+        .map(|(sp, tri)| sparse_covering(sp, tri.len()))
         .collect();
     let sparse_score = score_sparse_plan(
         &sparse_required_covering,
         &sparse_alt_coverings,
         trigram_required.is_empty(),
         &estimator,
+        decomposition.sparse_alternatives.len(),
+        &weights,
     );
 
-    let (sparse_lookups, sparse_cost) = match sparse_score {
-        Some((cost, lookups)) => (Some(lookups), Some(cost)),
-        None => (None, None),
+    let (sparse_lookups, sparse_cost, sparse_selectivity_cost) = match sparse_score {
+        Some(score) => (
+            Some(score.lookup_count),
+            Some(score.total_cost),
+            Some(score.selectivity_cost),
+        ),
+        None => (None, None, None),
     };
 
     // Extract literals for display (re-run extraction)
@@ -279,15 +334,17 @@ pub fn plan_diagnostics_with_strategy(
     PlanDiagnostics {
         selected,
         trigram_lookups,
-        trigram_cost,
+        trigram_cost: trigram_score.total_cost,
+        trigram_selectivity_cost: trigram_score.selectivity_cost,
         sparse_lookups,
         sparse_cost,
+        sparse_selectivity_cost,
         literals,
     }
 }
 
-/// Sparse score tuple: `(estimated_cost, lookup_count)`.
-type SparseScore = Option<(f64, usize)>;
+/// Sparse score details.
+type SparseScore = Option<PlanScore>;
 
 /// Sparse hash materialization tuple: `(required_hashes, alt_hash_sets)`.
 type SparseHashes = Option<(Vec<NgramHash>, Vec<Vec<NgramHash>>)>;
@@ -299,18 +356,20 @@ fn score_sparse_plan(
     sparse_alts: &[Option<Vec<SparseGram>>],
     no_required: bool,
     estimator: &dyn SelectivityEstimator,
+    branch_count: usize,
+    weights: &PlannerWeights,
 ) -> SparseScore {
     let req_count: usize;
-    let mut cost: f64;
+    let mut selectivity_cost: f64;
 
     if no_required {
         req_count = 0;
-        cost = 0.0;
+        selectivity_cost = 0.0;
     } else {
         match sparse_req {
             Some(covering) => {
                 req_count = covering.len();
-                cost = covering
+                selectivity_cost = covering
                     .iter()
                     .map(|g| estimator.estimate(g.hash, g.gram_len))
                     .sum();
@@ -324,7 +383,7 @@ fn score_sparse_plan(
         match alt {
             Some(covering) => {
                 alt_count += covering.len();
-                cost += covering
+                selectivity_cost += covering
                     .iter()
                     .map(|g| estimator.estimate(g.hash, g.gram_len))
                     .sum::<f64>();
@@ -333,11 +392,33 @@ fn score_sparse_plan(
         }
     }
 
-    Some((cost, req_count + alt_count))
+    let lookup_count = req_count + alt_count;
+    Some(score_plan(
+        selectivity_cost,
+        lookup_count,
+        branch_count,
+        weights,
+    ))
 }
 
 /// Materialize sparse hashes once sparse strategy has been selected.
 /// Returns None if sparse coverage is incomplete.
+fn score_plan(
+    selectivity_cost: f64,
+    lookup_count: usize,
+    branch_count: usize,
+    weights: &PlannerWeights,
+) -> PlanScore {
+    let total_cost = selectivity_cost
+        + lookup_count as f64 * weights.lookup_penalty
+        + branch_count as f64 * weights.branch_penalty;
+    PlanScore {
+        selectivity_cost,
+        lookup_count,
+        total_cost,
+    }
+}
+
 fn materialize_sparse_hashes(
     sparse_req: &Option<Vec<SparseGram>>,
     sparse_alts: &[Option<Vec<SparseGram>>],
@@ -387,8 +468,18 @@ mod tests {
     #[test]
     fn plan_picks_strategy() {
         let plan = plan_query("MAX_FILE_SIZE");
-        // Should have picked one of the two strategies
         assert!(plan.strategy == PlanStrategy::Trigram || plan.strategy == PlanStrategy::Sparse);
+    }
+
+    #[test]
+    fn literal_patterns_prefer_trigram_under_lookup_penalty() {
+        let simple = plan_query("MAX_FILE_SIZE");
+        let underscore = plan_query("hash_map_entry");
+        let camel = plan_query("HttpResponse");
+
+        assert_eq!(simple.strategy, PlanStrategy::Trigram);
+        assert_eq!(underscore.strategy, PlanStrategy::Trigram);
+        assert_eq!(camel.strategy, PlanStrategy::Trigram);
     }
 
     #[test]
@@ -400,21 +491,17 @@ mod tests {
     }
 
     #[test]
-    fn sparse_preferred_when_cost_is_lower() {
-        // The planner selects sparse when its estimated cost is lower than trigrams.
-        // Cost accounts for gram length (longer grams are more selective), so sparse
-        // may be preferred even with more lookups if the grams are longer.
+    fn sparse_preferred_when_modeled_cost_is_lower() {
         let diag = plan_diagnostics("DatabaseConnection_handler_initialize");
-        if let (Some(sparse_cost), Some(_sparse_lookups)) = (diag.sparse_cost, diag.sparse_lookups)
-        {
+        if let (Some(sparse_cost), Some(sparse_lookups)) = (diag.sparse_cost, diag.sparse_lookups) {
             if sparse_cost < diag.trigram_cost {
                 assert_eq!(diag.selected.strategy, PlanStrategy::Sparse);
+                assert_eq!(diag.selected.lookup_count, sparse_lookups);
             } else {
                 assert_eq!(diag.selected.strategy, PlanStrategy::Trigram);
             }
         }
 
-        // Verify that when sparse IS selected, the plan uses sparse hashes
         let plan = plan_query("DatabaseConnection_handler_initialize");
         if plan.strategy == PlanStrategy::Sparse {
             assert!(!plan.required_hashes.is_empty());
