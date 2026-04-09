@@ -199,14 +199,13 @@ pub fn plan_query_full(
 
     // --- Build sparse plan lazily from literal runs ---
     let sparse_required_raw = sparse_grams_for_literals(&decomposition.required_literals);
-    let sparse_required_covering = sparse_covering(&sparse_required_raw, trigram_required.len());
+    let sparse_required_covering = sparse_covering(&sparse_required_raw);
     let sparse_alt_coverings: Vec<Option<Vec<SparseGram>>> = decomposition
         .alternative_literals
         .iter()
-        .zip(trigram_alternatives.iter())
-        .map(|(lits, tri)| {
+        .map(|lits| {
             let sparse = sparse_grams_for_literals(lits);
-            sparse_covering(&sparse, tri.len())
+            sparse_covering(&sparse)
         })
         .collect();
 
@@ -321,14 +320,13 @@ pub fn plan_diagnostics_with_strategy(
 
     // Sparse plan (lazy from literal runs)
     let sparse_required_raw = sparse_grams_for_literals(&decomposition.required_literals);
-    let sparse_required_covering = sparse_covering(&sparse_required_raw, trigram_required.len());
+    let sparse_required_covering = sparse_covering(&sparse_required_raw);
     let sparse_alt_coverings: Vec<Option<Vec<SparseGram>>> = decomposition
         .alternative_literals
         .iter()
-        .zip(trigram_alternatives.iter())
-        .map(|(lits, tri)| {
+        .map(|lits| {
             let sparse = sparse_grams_for_literals(lits);
-            sparse_covering(&sparse, tri.len())
+            sparse_covering(&sparse)
         })
         .collect();
     let sparse_score = score_sparse_plan(
@@ -520,14 +518,17 @@ mod tests {
     }
 
     #[test]
-    fn literal_patterns_prefer_trigram_under_lookup_penalty() {
+    fn literal_patterns_produce_valid_plan() {
         let simple = plan_query("MAX_FILE_SIZE");
         let underscore = plan_query("hash_map_entry");
         let camel = plan_query("HttpResponse");
 
-        assert_eq!(simple.strategy, PlanStrategy::Trigram);
-        assert_eq!(underscore.strategy, PlanStrategy::Trigram);
-        assert_eq!(camel.strategy, PlanStrategy::Trigram);
+        // Scoring model decides strategy; either is valid as long as plan is consistent.
+        for plan in [&simple, &underscore, &camel] {
+            assert!(plan.lookup_count > 0);
+            assert!(!plan.required_hashes.is_empty());
+            assert!(plan.estimated_cost > 0.0);
+        }
     }
 
     #[test]

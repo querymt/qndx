@@ -98,20 +98,11 @@ pub fn decompose_pattern(pattern: &str) -> Decomposition {
 
 /// Select a sparse covering candidate set from available sparse n-grams.
 ///
-/// We keep this deterministic and conservative:
-/// - If no sparse grams exist, return `None`.
-/// - If sparse requires substantially more lookups than trigrams, return `None`.
-/// - Otherwise, return the extracted sparse covering as-is.
-///
-/// This provides a robust pre-filter while the planner applies a richer cost model.
-const MAX_SPARSE_LOOKUP_OVERAGE: usize = 1;
-
-pub fn sparse_covering(sparse: &[SparseGram], trigram_count: usize) -> Option<Vec<SparseGram>> {
+/// Returns `None` only when no sparse grams are available. Otherwise, returns
+/// the full covering and lets the planner's scoring model (with lookup and
+/// branch penalties) decide whether sparse is worth using.
+pub fn sparse_covering(sparse: &[SparseGram]) -> Option<Vec<SparseGram>> {
     if sparse.is_empty() {
-        return None;
-    }
-
-    if trigram_count > 0 && sparse.len() > trigram_count + MAX_SPARSE_LOOKUP_OVERAGE {
         return None;
     }
 
@@ -316,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn sparse_covering_rejects_large_overage() {
+    fn sparse_covering_passes_nonempty() {
         let sparse = vec![
             SparseGram {
                 hash: 1,
@@ -326,17 +317,14 @@ mod tests {
                 hash: 2,
                 gram_len: 3,
             },
-            SparseGram {
-                hash: 3,
-                gram_len: 3,
-            },
-            SparseGram {
-                hash: 4,
-                gram_len: 3,
-            },
         ];
-        assert!(sparse_covering(&sparse, 2).is_none());
-        assert!(sparse_covering(&sparse, 3).is_none());
-        assert!(sparse_covering(&sparse, 4).is_some());
+        assert!(sparse_covering(&sparse).is_some());
+        assert_eq!(sparse_covering(&sparse).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn sparse_covering_rejects_empty() {
+        let empty: Vec<SparseGram> = vec![];
+        assert!(sparse_covering(&empty).is_none());
     }
 }
