@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-04-09
+
+### Changed
+- Feature-gated CLI benchmark commands behind `bench-tools`; default `qndx-cli` build no longer requires `qndx-bench`.
+- Inlined benchmark report and budget-check logic in `qndx-cli` under the `bench-tools` feature.
+- Updated benchmark CI invocation to enable `bench-tools` for `qndx bench check-budgets`.
+- Added workspace-level package metadata (`repository`, `homepage`) and inherited it across all crates for cleaner publish metadata.
+
+### Fixed
+- Resolved `cargo publish --dry-run` failure for `qndx-core` caused by dev-dependencies on unpublished internal crates.
+- Moved differential integration tests from `qndx-core/tests` to `qndx-query/tests` to remove publish-order cycles.
+
 ## [0.1.0] - 2026-03-30
 
 Initial MVP release. Index-backed regex search with benchmark-driven architecture.
