@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use qndx_core::NgramHash;
+use qndx_index::ngram::extract_sparse_ngrams_covering;
 
 use crate::decompose::{Decomposition, SparseGram, decompose_pattern, sparse_covering};
 
@@ -158,6 +159,20 @@ pub fn plan_query_full(
 ) -> QueryPlan {
     let decomposition = decompose_pattern(pattern);
 
+    let has_any_prefilter = !decomposition.required.is_empty()
+        || decomposition.alternatives.iter().any(|a| !a.is_empty());
+    if !has_any_prefilter {
+        return QueryPlan {
+            decomposition,
+            strategy: PlanStrategy::Trigram,
+            required_hashes: Vec::new(),
+            alternative_hashes: Vec::new(),
+            lookup_count: 0,
+            estimated_cost: 0.0,
+            estimated_candidates: 0,
+        };
+    }
+
     // --- Build trigram plan ---
     let trigram_required = decomposition.required.clone();
     let trigram_alternatives = decomposition.alternatives.clone();
@@ -182,14 +197,17 @@ pub fn plan_query_full(
         &weights,
     );
 
-    // --- Build sparse plan ---
-    let sparse_required_covering =
-        sparse_covering(&decomposition.sparse_required, trigram_required.len());
+    // --- Build sparse plan lazily from literal runs ---
+    let sparse_required_raw = sparse_grams_for_literals(&decomposition.required_literals);
+    let sparse_required_covering = sparse_covering(&sparse_required_raw, trigram_required.len());
     let sparse_alt_coverings: Vec<Option<Vec<SparseGram>>> = decomposition
-        .sparse_alternatives
+        .alternative_literals
         .iter()
         .zip(trigram_alternatives.iter())
-        .map(|(sp, tri)| sparse_covering(sp, tri.len()))
+        .map(|(lits, tri)| {
+            let sparse = sparse_grams_for_literals(lits);
+            sparse_covering(&sparse, tri.len())
+        })
         .collect();
 
     // Evaluate sparse score (selectivity + lookup/branch overhead) without allocating sparse hash vectors.
@@ -198,7 +216,7 @@ pub fn plan_query_full(
         &sparse_alt_coverings,
         trigram_required.is_empty(),
         estimator,
-        decomposition.sparse_alternatives.len(),
+        decomposition.alternative_literals.len(),
         &weights,
     );
 
@@ -275,6 +293,8 @@ pub fn plan_diagnostics_with_strategy(
 ) -> PlanDiagnostics {
     let estimator = HashSelectivity;
     let decomposition = decompose_pattern(pattern);
+    let has_any_prefilter = !decomposition.required.is_empty()
+        || decomposition.alternatives.iter().any(|a| !a.is_empty());
 
     // Trigram plan
     let trigram_required = &decomposition.required;
@@ -299,21 +319,24 @@ pub fn plan_diagnostics_with_strategy(
         &weights,
     );
 
-    // Sparse plan
-    let sparse_required_covering =
-        sparse_covering(&decomposition.sparse_required, trigram_required.len());
+    // Sparse plan (lazy from literal runs)
+    let sparse_required_raw = sparse_grams_for_literals(&decomposition.required_literals);
+    let sparse_required_covering = sparse_covering(&sparse_required_raw, trigram_required.len());
     let sparse_alt_coverings: Vec<Option<Vec<SparseGram>>> = decomposition
-        .sparse_alternatives
+        .alternative_literals
         .iter()
         .zip(trigram_alternatives.iter())
-        .map(|(sp, tri)| sparse_covering(sp, tri.len()))
+        .map(|(lits, tri)| {
+            let sparse = sparse_grams_for_literals(lits);
+            sparse_covering(&sparse, tri.len())
+        })
         .collect();
     let sparse_score = score_sparse_plan(
         &sparse_required_covering,
         &sparse_alt_coverings,
         trigram_required.is_empty(),
         &estimator,
-        decomposition.sparse_alternatives.len(),
+        decomposition.alternative_literals.len(),
         &weights,
     );
 
@@ -330,6 +353,19 @@ pub fn plan_diagnostics_with_strategy(
     let literals = crate::decompose::extract_literals_for_diagnostics(pattern);
 
     let selected = plan_query_full(pattern, &estimator, strategy_override);
+
+    if !has_any_prefilter {
+        return PlanDiagnostics {
+            selected,
+            trigram_lookups: 0,
+            trigram_cost: 0.0,
+            trigram_selectivity_cost: 0.0,
+            sparse_lookups: None,
+            sparse_cost: None,
+            sparse_selectivity_cost: None,
+            literals,
+        };
+    }
 
     PlanDiagnostics {
         selected,
@@ -417,6 +453,18 @@ fn score_plan(
         lookup_count,
         total_cost,
     }
+}
+
+fn sparse_grams_for_literals(literals: &[String]) -> Vec<SparseGram> {
+    let mut grams = Vec::new();
+    for lit in literals {
+        for (hash, gram_len) in extract_sparse_ngrams_covering(lit.as_bytes()) {
+            grams.push(SparseGram { hash, gram_len });
+        }
+    }
+    grams.sort_unstable();
+    grams.dedup();
+    grams
 }
 
 fn materialize_sparse_hashes(
