@@ -80,6 +80,15 @@ enum Commands {
         #[arg(long, default_value = "auto")]
         strategy: StrategyArg,
     },
+    /// Show index statistics (ngram/postings distribution)
+    Stats {
+        /// Root directory (used with default index path)
+        #[arg(short, long)]
+        root: Option<PathBuf>,
+        /// Index directory
+        #[arg(short, long)]
+        index_dir: Option<PathBuf>,
+    },
     /// Benchmark operations
     #[cfg(feature = "bench-tools")]
     Bench {
@@ -632,6 +641,11 @@ fn main() {
             println!("Lookups:   {}", diag.selected.lookup_count);
             println!("Cost:      {:.2}", diag.selected.estimated_cost);
         }
+        Commands::Stats { root, index_dir } => {
+            let root = root.unwrap_or_else(|| PathBuf::from("."));
+            let index_dir = index_dir.unwrap_or_else(|| root.join(DEFAULT_INDEX_DIR));
+            run_index_stats(&index_dir);
+        }
         #[cfg(feature = "bench-tools")]
         Commands::Bench { action } => match action {
             BenchAction::Report {
@@ -663,6 +677,61 @@ fn main() {
             }
         },
     }
+}
+
+fn run_index_stats(index_dir: &Path) {
+    let reader = match qndx_index::IndexReader::open(index_dir) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error opening index: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let mut posting_lens = reader.all_posting_lens();
+    if posting_lens.is_empty() {
+        println!("Index Statistics ({})", index_dir.display());
+        println!("  Files:              {}", reader.file_count());
+        println!("  Total n-grams:      0");
+        println!("  Trigram-only:       0");
+        println!("  Sparse:             0");
+        println!();
+        println!("Posting List Distribution:");
+        println!("  Mean size:          0.00");
+        println!("  Median size:        0");
+        println!("  P95 size:           0");
+        println!("  P99 size:           0");
+        println!("  Max size:           0");
+        println!("  Lists > 1000:       0");
+        println!("  Lists > 10000:      0");
+        return;
+    }
+
+    posting_lens.sort_unstable();
+    let count = posting_lens.len();
+    let sum: usize = posting_lens.iter().sum();
+    let mean = sum as f64 / count as f64;
+    let median = posting_lens[count / 2];
+    let p95 = posting_lens[((count.saturating_sub(1)) * 95) / 100];
+    let p99 = posting_lens[((count.saturating_sub(1)) * 99) / 100];
+    let max = *posting_lens.last().unwrap_or(&0);
+    let gt_1k = posting_lens.iter().filter(|&&len| len > 1_000).count();
+    let gt_10k = posting_lens.iter().filter(|&&len| len > 10_000).count();
+
+    println!("Index Statistics ({})", index_dir.display());
+    println!("  Files:              {}", reader.file_count());
+    println!("  Total n-grams:      {}", reader.ngram_count());
+    println!("  Trigram-only:       {}", reader.trigram_only_count());
+    println!("  Sparse:             {}", reader.sparse_count());
+    println!();
+    println!("Posting List Distribution:");
+    println!("  Mean size:          {:.2}", mean);
+    println!("  Median size:        {}", median);
+    println!("  P95 size:           {}", p95);
+    println!("  P99 size:           {}", p99);
+    println!("  Max size:           {}", max);
+    println!("  Lists > 1000:       {}", gt_1k);
+    println!("  Lists > 10000:      {}", gt_10k);
 }
 
 fn run_index_search(

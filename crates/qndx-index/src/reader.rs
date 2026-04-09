@@ -254,6 +254,31 @@ impl IndexReader {
         self.lookup(hash).len()
     }
 
+    /// Return posting list lengths for all n-gram entries in table order.
+    pub fn all_posting_lens(&self) -> Vec<usize> {
+        let postings = self.postings_payload();
+        let mut lens = Vec::with_capacity(self.ngram_count);
+        for i in 0..self.ngram_count {
+            let entry = self.ngram_entry(i);
+            let start = entry.offset as usize;
+            let end = start + entry.len as usize;
+            if end <= postings.len() {
+                let len = PostingList::decode_tagged(&postings[start..end])
+                    .map(|p| p.len())
+                    .unwrap_or(0);
+                lens.push(len);
+            } else {
+                lens.push(0);
+            }
+        }
+        lens
+    }
+
+    /// Return all n-gram table entries in on-disk order.
+    pub fn all_ngram_entries(&self) -> Vec<qndx_core::NgramEntry> {
+        (0..self.ngram_count).map(|i| self.ngram_entry(i)).collect()
+    }
+
     /// Get the number of indexed files.
     pub fn file_count(&self) -> u32 {
         self.manifest.file_count
