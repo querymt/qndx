@@ -1,22 +1,22 @@
-//! File format versioning: magic bytes, version, and CRC32 checksum headers.
+//! File format versioning: magic bytes, version, and checksum headers.
 //!
 //! Every index file (`ngrams.tbl`, `postings.dat`, `manifest.bin`) starts with
 //! a fixed-size header for forward compatibility and corruption detection.
 //!
-//! Header layout (20 bytes):
+//! Header layout (24 bytes):
 //!   [0..4]   magic bytes (identifies file type)
 //!   [4..8]   format version (u32 LE)
 //!   [8..16]  payload length in bytes (u64 LE)
-//!   [16..20] CRC32 checksum of payload (u32 LE)
+//!   [16..24] rapidhash-v3 checksum of payload (u64 LE)
 
 use crate::FileId;
 use std::io::{self, Read, Write};
 
 /// Header size in bytes.
-pub const HEADER_SIZE: usize = 20;
+pub const HEADER_SIZE: usize = 24;
 
 /// Current format version.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Magic bytes for `ngrams.tbl`.
 pub const MAGIC_NGRAMS: [u8; 4] = *b"QXNG";
@@ -39,7 +39,7 @@ pub struct FileHeader {
     pub magic: [u8; 4],
     pub version: u32,
     pub payload_len: u64,
-    pub checksum: u32,
+    pub checksum: u64,
 }
 
 /// Errors from format validation.
@@ -51,8 +51,8 @@ pub enum FormatError {
     BadMagic { expected: [u8; 4], found: [u8; 4] },
     /// Version is not supported.
     UnsupportedVersion { found: u32, max_supported: u32 },
-    /// CRC32 checksum mismatch (corruption detected).
-    ChecksumMismatch { expected: u32, computed: u32 },
+    /// Payload checksum mismatch (corruption detected).
+    ChecksumMismatch { expected: u64, computed: u64 },
     /// Payload length does not match actual data.
     PayloadLengthMismatch { expected: u64, actual: u64 },
 }
@@ -77,7 +77,7 @@ impl std::fmt::Display for FormatError {
             ),
             FormatError::ChecksumMismatch { expected, computed } => write!(
                 f,
-                "checksum mismatch: expected 0x{:08x}, computed 0x{:08x}",
+                "checksum mismatch: expected 0x{:016x}, computed 0x{:016x}",
                 expected, computed,
             ),
             FormatError::PayloadLengthMismatch { expected, actual } => write!(
@@ -97,11 +97,9 @@ impl From<io::Error> for FormatError {
     }
 }
 
-/// Compute CRC32 checksum of a byte slice.
-pub fn compute_checksum(data: &[u8]) -> u32 {
-    let mut hasher = crc32fast::Hasher::new();
-    hasher.update(data);
-    hasher.finalize()
+/// Compute a deterministic rapidhash-v3 checksum of a byte slice.
+pub fn compute_checksum(data: &[u8]) -> u64 {
+    rapidhash::v3::rapidhash_v3(data)
 }
 
 /// Write a file header followed by payload.
@@ -134,7 +132,7 @@ fn write_header<W: Write>(writer: &mut W, header: &FileHeader) -> Result<(), For
 /// Validate a file header from a byte slice (for use with mmap).
 ///
 /// Checks magic bytes, version, and payload length against the file size.
-/// Returns the validated header. Does NOT check the CRC (call
+/// Returns the validated header. Does NOT check the payload checksum (call
 /// `validate_checksum_from_slice` separately if needed).
 pub fn validate_header_from_slice(
     data: &[u8],
@@ -165,7 +163,7 @@ pub fn validate_header_from_slice(
     }
 
     let payload_len = u64::from_le_bytes(data[8..16].try_into().unwrap());
-    let checksum = u32::from_le_bytes(data[16..20].try_into().unwrap());
+    let checksum = u64::from_le_bytes(data[16..24].try_into().unwrap());
 
     let actual_payload_len = data.len() as u64 - HEADER_SIZE as u64;
     if payload_len != actual_payload_len {
@@ -183,7 +181,7 @@ pub fn validate_header_from_slice(
     })
 }
 
-/// Validate the CRC32 checksum of the payload region in a byte slice.
+/// Validate the payload checksum of the payload region in a byte slice.
 ///
 /// `data` should be the full file contents (header + payload).
 /// This is an O(n) operation over the entire payload.
@@ -253,7 +251,7 @@ fn read_header<R: Read>(
     }
 
     let payload_len = u64::from_le_bytes(buf[8..16].try_into().unwrap());
-    let checksum = u32::from_le_bytes(buf[16..20].try_into().unwrap());
+    let checksum = u64::from_le_bytes(buf[16..24].try_into().unwrap());
 
     Ok(FileHeader {
         magic,

@@ -3,6 +3,19 @@
 version = 4
 
 [[package]]
+name = "ahash"
+version = "0.8.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
+dependencies = [
+ "cfg-if",
+ "getrandom 0.3.4",
+ "once_cell",
+ "version_check",
+ "zerocopy",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1822,8 +1835,10 @@ dependencies = [
 
 [[package]]
 name = "qndx-bench"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
+ "ahash",
+ "crc32fast",
  "criterion",
  "postcard",
  "qndx-core",
@@ -1831,17 +1846,19 @@ dependencies = [
  "qndx-index",
  "qndx-query",
  "rand 0.10.0",
+ "rapidhash",
  "roaring",
  "serde",
  "serde_json",
  "tempfile",
  "toml",
  "wincode",
+ "xxhash-rust",
 ]
 
 [[package]]
 name = "qndx-cli"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "clap",
  "qndx-core",
@@ -1855,10 +1872,10 @@ dependencies = [
 
 [[package]]
 name = "qndx-core"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
- "crc32fast",
  "ignore",
+ "rapidhash",
  "regex",
  "serde",
  "tempfile",
@@ -1867,7 +1884,7 @@ dependencies = [
 
 [[package]]
 name = "qndx-git"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "gix",
  "qndx-core",
@@ -1877,7 +1894,7 @@ dependencies = [
 
 [[package]]
 name = "qndx-index"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "memmap2",
  "postcard",
@@ -1891,7 +1908,7 @@ dependencies = [
 
 [[package]]
 name = "qndx-query"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "proptest",
  "qndx-core",
@@ -1982,6 +1999,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
 dependencies = [
  "rand_core 0.9.5",
+]
+
+[[package]]
+name = "rapidhash"
+version = "4.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5e48930979c155e2f33aa36ab3119b5ee81332beb6482199a8ecd6029b80b59"
+dependencies = [
+ "rustversion",
 ]
 
 [[package]]
@@ -2698,6 +2724,12 @@ dependencies = [
  "unicode-xid",
  "wasmparser",
 ]
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdd20c5420375476fbd4394763288da7eb0cc0b8c11deed431a91562af7335d3"
 
 [[package]]
 name = "zerocopy"

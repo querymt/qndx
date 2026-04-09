@@ -5,7 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/qndx-index"
 description = "Index builder, storage writer/reader for qndx"
+readme = "../../README.md"
 
 [dependencies]
 qndx-core = { workspace = true }

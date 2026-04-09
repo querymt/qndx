@@ -43,7 +43,7 @@ pub fn extract_trigrams(data: &[u8]) -> Vec<NgramHash> {
 ///
 /// Complexity: O(n²) worst-case, but the early-break on `interior_max >=
 /// weights[i]` keeps practical cost close to O(n) for inputs with varied
-/// pair-weights (e.g. source code hashed with CRC32).
+/// pair-weights (e.g. source code hashed with rapidhash).
 ///
 /// Returns a sorted, deduplicated list of `(hash, gram_byte_length)`.
 pub fn extract_sparse_ngrams_all(data: &[u8]) -> Vec<(NgramHash, usize)> {
