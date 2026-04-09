@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-04-09
+
+### Changed
+- `qndx-cli` now builds the release binary as `qndx` (for example: `./target/release/qndx`).
+- Release packaging workflow now copies `qndx`/`qndx.exe` directly from `target/<target>/release/`.
+
 ## [0.1.1] - 2026-04-09
 
 ### Changed
