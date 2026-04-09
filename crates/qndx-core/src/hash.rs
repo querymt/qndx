@@ -1,16 +1,12 @@
 //! Hashing utilities for n-grams and file identification.
 
-use crc32fast::Hasher;
-
-/// Hash a byte slice using CRC32 (used for n-gram hashing).
+/// Hash a byte slice using rapidhash (truncated to u32 for on-disk compatibility).
 pub fn hash_ngram(bytes: &[u8]) -> u32 {
-    let mut hasher = Hasher::new();
-    hasher.update(bytes);
-    hasher.finalize()
+    rapidhash::v3::rapidhash_v3(bytes) as u32
 }
 
 /// Compute the weight of a character pair for sparse n-gram extraction.
-/// Uses CRC32 as the default deterministic weight function.
+/// Uses deterministic rapidhash-derived weights.
 pub fn pair_weight(a: u8, b: u8) -> u32 {
     hash_ngram(&[a, b])
 }

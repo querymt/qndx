@@ -5,7 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/qndx-git"
 description = "Git integration (gix-first) for qndx freshness model"
+readme = "../../README.md"
 
 [dependencies]
 qndx-core = { workspace = true }

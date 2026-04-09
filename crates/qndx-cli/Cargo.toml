@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "CLI entrypoints for qndx (index/search/bench/report)"
+readme = "../../README.md"
 
 [[bin]]
 name = "qndx"

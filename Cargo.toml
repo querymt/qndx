@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/querymt/qndx"
@@ -18,11 +18,11 @@ homepage = "https://github.com/querymt/qndx"
 
 [workspace.dependencies]
 # Internal crates
-qndx-core = { path = "crates/qndx-core", version = "0.1.2" }
-qndx-index = { path = "crates/qndx-index", version = "0.1.2" }
-qndx-query = { path = "crates/qndx-query", version = "0.1.2" }
-qndx-git = { path = "crates/qndx-git", version = "0.1.2" }
-qndx-bench = { path = "crates/qndx-bench", version = "0.1.2" }
+qndx-core = { path = "crates/qndx-core", version = "0.2.0" }
+qndx-index = { path = "crates/qndx-index", version = "0.2.0" }
+qndx-query = { path = "crates/qndx-query", version = "0.2.0" }
+qndx-git = { path = "crates/qndx-git", version = "0.2.0" }
+qndx-bench = { path = "crates/qndx-bench", version = "0.2.0" }
 
 # Benchmark framework
 criterion = { version = "0.8", features = ["html_reports"] }
@@ -53,6 +53,7 @@ memmap2 = "0.9"
 
 # Hashing
 crc32fast = "1"
+rapidhash = "4"
 
 # Random (deterministic fixtures)
 rand = { version = "0.10", features = ["chacha"] }

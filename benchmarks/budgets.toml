@@ -89,6 +89,16 @@ critical = true
 growth_pct = 30.0
 critical = false
 
+[query_planner.decompose_time]
+p50_regression_pct = 15.0
+p95_regression_pct = 20.0
+critical = false
+
+[query_planner.diagnostics_time]
+p50_regression_pct = 20.0
+p95_regression_pct = 25.0
+critical = false
+
 # ============================================================================
 # End-to-End Search Benchmarks (MOST CRITICAL)
 # ============================================================================
@@ -125,6 +135,30 @@ description = "Percentage of time spent in verification stage"
 tolerance_pct = 0.0
 critical = true
 description = "Match counts must be exact (no false negatives/positives)"
+
+[end_to_end_search.plan_only]
+p50_regression_pct = 15.0
+p95_regression_pct = 20.0
+critical = false
+description = "Planner-only stage latency"
+
+[end_to_end_search.candidate_only]
+p50_regression_pct = 15.0
+p95_regression_pct = 20.0
+critical = false
+description = "Candidate generation stage latency"
+
+[end_to_end_search.verify_only]
+p50_regression_pct = 15.0
+p95_regression_pct = 20.0
+critical = false
+description = "Verification-only stage latency"
+
+[end_to_end_search.search_preplanned]
+p50_regression_pct = 12.0
+p95_regression_pct = 15.0
+critical = false
+description = "End-to-end search with precomputed plan"
 
 # ============================================================================
 # Git Overlay Benchmarks
@@ -199,9 +233,15 @@ description = "Total n-grams stored in index"
 "postings_encode_decode/*/encode/*" = "postings_choice.encode"
 "postings_encode_decode/*/decode/*" = "postings_choice.decode"
 "ngram_extract/*/build/*" = "ngram_extract.throughput"
+"query_planner/decompose/*" = "query_planner.decompose_time"
 "query_planner/plan/*" = "query_planner.planning_time"
+"query_planner/diagnostics/*" = "query_planner.diagnostics_time"
 "end_to_end_search/search/literal_*" = "end_to_end_search.literal"
 "end_to_end_search/search/regex_*" = "end_to_end_search.regex"
+"end_to_end_search/plan_only/*" = "end_to_end_search.plan_only"
+"end_to_end_search/candidate_only/*" = "end_to_end_search.candidate_only"
+"end_to_end_search/verify_only/*" = "end_to_end_search.verify_only"
+"end_to_end_search/search_preplanned/*" = "end_to_end_search.search_preplanned"
 "git_overlay/detect_dirty_files" = "git_overlay.dirty_detection"
 "git_overlay/head_commit" = "git_overlay.dirty_detection"
 

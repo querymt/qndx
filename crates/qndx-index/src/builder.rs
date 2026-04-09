@@ -9,10 +9,10 @@
 //! 6. Write ngrams.tbl (sorted hash -> offset/len/flags entries)
 //! 7. Write manifest.bin (metadata + file path list)
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::BufWriter;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use qndx_core::format::{
     self, FLAG_SPARSE, MAGIC_MANIFEST, MAGIC_NGRAMS, MAGIC_POSTINGS, NGRAM_ENTRY_SIZE,
@@ -22,6 +22,7 @@ use qndx_core::{FileId, Manifest, NgramEntry, NgramHash};
 
 use crate::ngram::{extract_sparse_ngrams_all, extract_trigrams};
 use crate::postings::{DEFAULT_HYBRID_THRESHOLD, PostingList};
+use crate::reader::IndexReader;
 
 /// Result of building an index.
 #[derive(Debug)]
@@ -40,6 +41,23 @@ pub struct BuildResult {
     pub source_bytes: u64,
 }
 
+/// Result of an incremental update attempt.
+#[derive(Debug)]
+pub struct IncrementalResult {
+    /// True when no files changed since base commit.
+    pub up_to_date: bool,
+    /// Number of files changed since base commit.
+    pub changed_files: usize,
+    /// Number of indexed files before rebuild.
+    pub previous_file_count: u32,
+    /// Number of indexed files after rebuild.
+    pub new_file_count: u32,
+    /// Whether we fell back to a full rebuild due to change ratio.
+    pub forced_full_rebuild: bool,
+    /// Build stats when a rebuild happened.
+    pub build_result: Option<BuildResult>,
+}
+
 /// Build a trigram index from in-memory file data.
 ///
 /// `files` is a list of (relative_path, content) pairs.
@@ -54,7 +72,7 @@ pub fn build_index(
     // Step 1: Build inverted index (ngram_hash -> sorted Vec<FileId>)
     // We track which hashes are sparse vs trigram via a separate set.
     let mut inverted: BTreeMap<NgramHash, Vec<FileId>> = BTreeMap::new();
-    let mut sparse_hashes: std::collections::HashSet<NgramHash> = std::collections::HashSet::new();
+    let mut sparse_hashes: HashSet<NgramHash> = HashSet::new();
     let mut source_bytes: u64 = 0;
 
     for (file_id, (_path, content)) in files.iter().enumerate() {
@@ -181,7 +199,7 @@ pub fn build_index_from_dir(
 
     // Step 1: Build inverted index by streaming files one at a time
     let mut inverted: BTreeMap<NgramHash, Vec<FileId>> = BTreeMap::new();
-    let mut sparse_hashes: std::collections::HashSet<NgramHash> = std::collections::HashSet::new();
+    let mut sparse_hashes: HashSet<NgramHash> = HashSet::new();
     let mut source_bytes: u64 = 0;
     let mut file_paths: Vec<String> = Vec::with_capacity(discovered.len());
 
@@ -295,9 +313,100 @@ pub fn build_index_from_dir(
     })
 }
 
+/// Update an existing index using git change detection and smart skip behavior.
+///
+/// Current implementation performs a full rebuild when changes are detected,
+/// but can skip work entirely when the index is already up to date.
+pub fn update_index_from_dir(
+    root: &Path,
+    index_dir: &Path,
+    config: &qndx_core::walk::WalkConfig,
+    new_base_commit: Option<String>,
+    change_threshold_percent: u8,
+) -> Result<IncrementalResult, format::FormatError> {
+    let reader = IndexReader::open(index_dir)?;
+    let previous_file_count = reader.file_count();
+    let base_commit = reader.manifest.base_commit.clone();
+    drop(reader);
+
+    let root_abs = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let index_dir_abs = index_dir.canonicalize().ok();
+
+    let rebuild = |forced_full_rebuild: bool| {
+        let build_result = build_index_from_dir(root, index_dir, config, new_base_commit.clone())?;
+        Ok::<IncrementalResult, format::FormatError>(IncrementalResult {
+            up_to_date: false,
+            changed_files: 0,
+            previous_file_count,
+            new_file_count: build_result.file_count,
+            forced_full_rebuild,
+            build_result: Some(build_result),
+        })
+    };
+
+    let Some(base_commit) = base_commit else {
+        return rebuild(true);
+    };
+
+    let repo = match qndx_git::GitRepo::open(root) {
+        Ok(repo) => repo,
+        Err(_) => return rebuild(true),
+    };
+
+    let changes = match repo.detect_changes_since(&base_commit) {
+        Ok(changes) => changes,
+        Err(_) => return rebuild(true),
+    };
+
+    let mut latest_changes: HashMap<PathBuf, qndx_git::FileStatus> = HashMap::new();
+    for (path, status) in changes {
+        let abs_path = root_abs.join(&path);
+        if let Some(idx_abs) = &index_dir_abs
+            && abs_path.starts_with(idx_abs)
+        {
+            continue;
+        }
+        latest_changes.insert(path, status);
+    }
+
+    let changed_files = latest_changes
+        .values()
+        .filter(|status| !matches!(status, qndx_git::FileStatus::Clean))
+        .count();
+
+    if changed_files == 0 {
+        return Ok(IncrementalResult {
+            up_to_date: true,
+            changed_files: 0,
+            previous_file_count,
+            new_file_count: previous_file_count,
+            forced_full_rebuild: false,
+            build_result: None,
+        });
+    }
+
+    let change_ratio = if previous_file_count == 0 {
+        100.0
+    } else {
+        (changed_files as f64 * 100.0) / previous_file_count as f64
+    };
+
+    let build_result = build_index_from_dir(root, index_dir, config, new_base_commit)?;
+    Ok(IncrementalResult {
+        up_to_date: false,
+        changed_files,
+        previous_file_count,
+        new_file_count: build_result.file_count,
+        forced_full_rebuild: change_ratio > change_threshold_percent as f64,
+        build_result: Some(build_result),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::process::Command;
 
     fn sample_files() -> Vec<(String, Vec<u8>)> {
         vec![
@@ -386,5 +495,78 @@ mod tests {
             result.trigram_count + result.sparse_count,
             "total should equal trigram-only + sparse"
         );
+    }
+
+    fn setup_git_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+
+        fs::write(root.join("main.rs"), "fn main() { println!(\"old\"); }\n").unwrap();
+        fs::write(root.join("lib.rs"), "pub const VERSION: &str = \"1\";\n").unwrap();
+
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+
+        dir
+    }
+
+    #[test]
+    fn incremental_up_to_date_skips_rebuild() {
+        let dir = setup_git_repo();
+        let root = dir.path();
+        let index_dir = root.join(".qndx/index/v1");
+        let config = qndx_core::walk::WalkConfig::default();
+
+        let base = qndx_git::head_commit(root).unwrap();
+        build_index_from_dir(root, &index_dir, &config, Some(base.clone())).unwrap();
+
+        let result = update_index_from_dir(root, &index_dir, &config, Some(base), 50).unwrap();
+        assert!(result.up_to_date);
+        assert_eq!(result.changed_files, 0);
+        assert!(result.build_result.is_none());
+    }
+
+    #[test]
+    fn incremental_rebuild_when_changed() {
+        let dir = setup_git_repo();
+        let root = dir.path();
+        let index_dir = root.join(".qndx/index/v1");
+        let config = qndx_core::walk::WalkConfig::default();
+
+        let base = qndx_git::head_commit(root).unwrap();
+        build_index_from_dir(root, &index_dir, &config, Some(base)).unwrap();
+
+        fs::write(root.join("main.rs"), "fn main() { println!(\"new\"); }\n").unwrap();
+
+        let new_head = qndx_git::head_commit(root).ok();
+        let result = update_index_from_dir(root, &index_dir, &config, new_head, 50).unwrap();
+
+        assert!(!result.up_to_date);
+        assert!(result.changed_files >= 1);
+        assert!(result.build_result.is_some());
     }
 }

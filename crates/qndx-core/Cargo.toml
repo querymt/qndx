@@ -5,12 +5,14 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/qndx-core"
 description = "Shared types, file format definitions, hashing, and IDs for qndx"
+readme = "../../README.md"
 
 [dependencies]
 serde = { workspace = true }
 wincode = { workspace = true }
-crc32fast = { workspace = true }
+rapidhash = { workspace = true }
 ignore = { workspace = true }
 regex = { workspace = true }
 

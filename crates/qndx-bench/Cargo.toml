@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Shared bench fixtures and utilities for qndx"
+readme = "../../README.md"
 
 [dependencies]
 qndx-core = { workspace = true }
@@ -23,6 +24,10 @@ postcard = { workspace = true }
 wincode = { workspace = true }
 roaring = { workspace = true }
 tempfile = { workspace = true }
+crc32fast = { workspace = true }
+rapidhash = { workspace = true }
+ahash = "0.8"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [[bench]]
 name = "serializer_choice"
@@ -50,4 +55,8 @@ harness = false
 
 [[bench]]
 name = "real_corpus"
+harness = false
+
+[[bench]]
+name = "hash_choice"
 harness = false

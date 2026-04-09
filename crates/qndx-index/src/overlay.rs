@@ -39,6 +39,10 @@ pub struct OverlayIndex {
     base_file_id: FileId,
 }
 
+fn is_internal_qndx_path(rel_path: &Path) -> bool {
+    rel_path.starts_with(".qndx/index")
+}
+
 impl OverlayIndex {
     /// Create a new empty overlay index.
     ///
@@ -66,6 +70,10 @@ impl OverlayIndex {
         let mut overlay = Self::new(base_file_id);
 
         for (rel_path, status) in dirty_files {
+            if is_internal_qndx_path(rel_path) {
+                continue;
+            }
+
             match status {
                 FileStatus::Modified | FileStatus::Added => {
                     // Read and index the file
@@ -336,5 +344,27 @@ mod tests {
         assert_eq!(overlay.file_count(), 2); // modified + added
         assert_eq!(overlay.deleted_count(), 1); // deleted
         assert!(overlay.is_deleted(Path::new("deleted.txt")));
+    }
+
+    #[test]
+    fn overlay_ignores_internal_index_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        std::fs::create_dir_all(root.join(".qndx/index/v1")).unwrap();
+        std::fs::write(root.join("main.rs"), b"fn main() {}\n").unwrap();
+        std::fs::write(root.join(".qndx/index/v1/ngrams.tbl"), b"artifact").unwrap();
+
+        let dirty_files = vec![
+            (PathBuf::from("main.rs"), FileStatus::Modified),
+            (
+                PathBuf::from(".qndx/index/v1/ngrams.tbl"),
+                FileStatus::Added,
+            ),
+        ];
+
+        let overlay = OverlayIndex::from_dirty_files(root, &dirty_files, 1_000_000_000).unwrap();
+        assert_eq!(overlay.file_count(), 1);
+        assert_eq!(overlay.file_path(1_000_000_000), Some(Path::new("main.rs")));
     }
 }

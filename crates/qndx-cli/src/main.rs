@@ -39,6 +39,9 @@ enum Commands {
         /// Include binary files
         #[arg(long)]
         binary: bool,
+        /// Force a full rebuild even if incremental update is possible
+        #[arg(long)]
+        full: bool,
     },
     /// Search using regex
     Search {
@@ -506,6 +509,7 @@ fn main() {
             max_file_size,
             hidden,
             binary,
+            full,
         } => {
             let root = root.unwrap_or_else(|| PathBuf::from("."));
             let index_dir = index_dir.unwrap_or_else(|| root.join(DEFAULT_INDEX_DIR));
@@ -519,17 +523,64 @@ fn main() {
             let start = Instant::now();
             eprintln!("Building index for {} ...", root.display());
 
-            match qndx_index::build_index_from_dir(&root, &index_dir, &config, None) {
-                Ok(result) => {
+            let head_commit = qndx_git::head_commit(&root).ok();
+            let index_exists = index_dir.join("manifest.bin").exists()
+                && index_dir.join("ngrams.tbl").exists()
+                && index_dir.join("postings.dat").exists();
+
+            let result = if !full && index_exists {
+                qndx_index::update_index_from_dir(
+                    &root,
+                    &index_dir,
+                    &config,
+                    head_commit.clone(),
+                    50,
+                )
+            } else {
+                qndx_index::build_index_from_dir(&root, &index_dir, &config, head_commit).map(|r| {
+                    qndx_index::IncrementalResult {
+                        up_to_date: false,
+                        changed_files: 0,
+                        previous_file_count: 0,
+                        new_file_count: r.file_count,
+                        forced_full_rebuild: true,
+                        build_result: Some(r),
+                    }
+                })
+            };
+
+            match result {
+                Ok(update) => {
                     let elapsed = start.elapsed();
-                    eprintln!(
-                        "Indexed {} files ({} trigrams, {} bytes postings) from {} source bytes in {:.3}s",
-                        result.file_count,
-                        result.ngram_count,
-                        result.postings_bytes,
-                        result.source_bytes,
-                        elapsed.as_secs_f64(),
-                    );
+                    if update.up_to_date {
+                        eprintln!(
+                            "Index is up to date ({} files) in {:.3}s",
+                            update.previous_file_count,
+                            elapsed.as_secs_f64()
+                        );
+                        return;
+                    }
+
+                    if update.changed_files > 0 {
+                        eprintln!(
+                            "Detected {} changed files since previous index ({} -> {} files)",
+                            update.changed_files, update.previous_file_count, update.new_file_count
+                        );
+                        if update.forced_full_rebuild {
+                            eprintln!("Change ratio exceeded 50%; performed full rebuild");
+                        }
+                    }
+
+                    if let Some(build_result) = update.build_result {
+                        eprintln!(
+                            "Indexed {} files ({} trigrams, {} bytes postings) from {} source bytes in {:.3}s",
+                            build_result.file_count,
+                            build_result.ngram_count,
+                            build_result.postings_bytes,
+                            build_result.source_bytes,
+                            elapsed.as_secs_f64(),
+                        );
+                    }
                     eprintln!("Index written to {}", index_dir.display());
                 }
                 Err(e) => {

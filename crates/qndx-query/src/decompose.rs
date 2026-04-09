@@ -7,7 +7,7 @@
 //! with fewer, longer n-grams for reduced posting lookups.
 
 use qndx_core::NgramHash;
-use qndx_index::ngram::{extract_sparse_ngrams_covering, extract_trigrams};
+use qndx_index::ngram::extract_trigrams;
 
 /// A sparse n-gram with its hash and the byte length of the original gram.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -26,11 +26,14 @@ pub struct Decomposition {
     /// Each branch is a set of required hashes (AND within branch).
     /// Used when the pattern contains top-level alternation.
     pub alternatives: Vec<Vec<NgramHash>>,
-    /// Sparse n-gram covering for required literals (AND semantics).
-    /// Each entry covers a contiguous span of the literal; together they
-    /// cover all positions, so using these instead of trigrams is sound.
+    /// Literal runs contributing to `required` hashes.
+    pub required_literals: Vec<String>,
+    /// Literal runs for each alternative branch.
+    pub alternative_literals: Vec<Vec<String>>,
+    /// Backward-compatible sparse fields. These are intentionally left empty
+    /// during decomposition; sparse grams are computed lazily by the planner.
     pub sparse_required: Vec<SparseGram>,
-    /// Sparse n-gram covering for each alternative branch.
+    /// Backward-compatible sparse fields. Computed lazily by the planner.
     pub sparse_alternatives: Vec<Vec<SparseGram>>,
 }
 
@@ -48,76 +51,56 @@ pub fn decompose_pattern(pattern: &str) -> Decomposition {
 
     if branches.len() == 1 {
         // No alternation: all trigrams are required (AND)
-        let literals = extract_literals(&branches[0]);
+        let required_literals = extract_literals(&branches[0]);
         let mut required = Vec::new();
-        let mut sparse_required = Vec::new();
-        for lit in &literals {
+        for lit in &required_literals {
             let trigrams = extract_trigrams(lit.as_bytes());
             required.extend(trigrams);
-
-            let sparse = extract_sparse_ngrams_covering(lit.as_bytes());
-            for (hash, gram_len) in sparse {
-                sparse_required.push(SparseGram { hash, gram_len });
-            }
         }
         required.sort_unstable();
         required.dedup();
-        sparse_required.sort_unstable();
-        sparse_required.dedup();
 
         Decomposition {
             required,
             alternatives: Vec::new(),
-            sparse_required,
+            required_literals,
+            alternative_literals: Vec::new(),
+            sparse_required: Vec::new(),
             sparse_alternatives: Vec::new(),
         }
     } else {
         // Top-level alternation: each branch is an alternative (OR between branches)
         let mut alternatives = Vec::new();
-        let mut sparse_alternatives = Vec::new();
+        let mut alternative_literals = Vec::new();
         for branch in &branches {
             let literals = extract_literals(branch);
             let mut hashes = Vec::new();
-            let mut sparse_branch = Vec::new();
             for lit in &literals {
                 let trigrams = extract_trigrams(lit.as_bytes());
                 hashes.extend(trigrams);
-
-                let sparse = extract_sparse_ngrams_covering(lit.as_bytes());
-                for (hash, gram_len) in sparse {
-                    sparse_branch.push(SparseGram { hash, gram_len });
-                }
             }
             hashes.sort_unstable();
             hashes.dedup();
-            sparse_branch.sort_unstable();
-            sparse_branch.dedup();
             alternatives.push(hashes);
-            sparse_alternatives.push(sparse_branch);
+            alternative_literals.push(literals);
         }
 
         Decomposition {
             required: Vec::new(),
             alternatives,
+            required_literals: Vec::new(),
+            alternative_literals,
             sparse_required: Vec::new(),
-            sparse_alternatives,
+            sparse_alternatives: Vec::new(),
         }
     }
 }
 
-/// Select a sparse covering set from available sparse n-grams.
+/// Select a sparse covering candidate set from available sparse n-grams.
 ///
-/// Given a list of sparse n-grams (each covering some byte span of the literal),
-/// returns all of them as a valid covering if any exist. The planner's cost model
-/// decides whether sparse or trigram is cheaper — this function no longer
-/// pre-filters on count, so longer (more selective) grams get a fair comparison.
-///
-/// Returns None only when no sparse grams are available at all.
-///
-/// TODO: Add smarter covering-set selection here (e.g. drop grams whose
-/// cost exceeds a threshold, or greedily prune to a minimal covering).
-/// The subset invariant (covering ⊆ build_all) is now guaranteed by
-/// `extract_sparse_ngrams_all` at index time.
+/// Returns `None` only when no sparse grams are available. Otherwise, returns
+/// the full covering and lets the planner's scoring model (with lookup and
+/// branch penalties) decide whether sparse is worth using.
 pub fn sparse_covering(sparse: &[SparseGram]) -> Option<Vec<SparseGram>> {
     if sparse.is_empty() {
         return None;
@@ -321,5 +304,27 @@ mod tests {
         assert!(d.alternatives[0].is_empty());
         // "parse_config" should have trigrams
         assert!(!d.alternatives[1].is_empty());
+    }
+
+    #[test]
+    fn sparse_covering_passes_nonempty() {
+        let sparse = vec![
+            SparseGram {
+                hash: 1,
+                gram_len: 3,
+            },
+            SparseGram {
+                hash: 2,
+                gram_len: 3,
+            },
+        ];
+        assert!(sparse_covering(&sparse).is_some());
+        assert_eq!(sparse_covering(&sparse).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn sparse_covering_rejects_empty() {
+        let empty: Vec<SparseGram> = vec![];
+        assert!(sparse_covering(&empty).is_none());
     }
 }

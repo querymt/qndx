@@ -34,8 +34,8 @@ qndx-cli
 The foundation layer. Contains nothing index-specific -- just the primitives that every other crate needs.
 
 - **Types** (`types.rs`): `FileId` (u32), `NgramHash` (u32), `NgramEntry`, `Manifest`
-- **Format** (`format.rs`): File header layout (20 bytes: magic, version, payload length, CRC32), read/write/validate functions, n-gram entry serialization, postings encoding (fixed-width delta, varint delta)
-- **Hash** (`hash.rs`): CRC32-based n-gram hashing (`hash_ngram`), pair weighting for sparse n-gram selectivity
+- **Format** (`format.rs`): File header layout (24 bytes: magic, version, payload length, rapidhash-v3 checksum), read/write/validate functions, n-gram entry serialization, postings encoding (fixed-width delta, varint delta)
+- **Hash** (`hash.rs`): rapidhash-v3 n-gram hashing (`hash_ngram`, truncated to u32), pair weighting for sparse n-gram selectivity
 - **Walk** (`walk.rs`): File discovery using the `ignore` crate. Respects `.gitignore`, `.ignore`, file size limits, binary detection. Returns sorted results for determinism.
 - **Scan** (`scan.rs`): Scan-only search (no index). Serves as the correctness oracle -- index-backed results must match scan results. Extracts matches with line/column positions.
 
@@ -47,7 +47,7 @@ Builds and reads the on-disk index.
   - `build_index()`: from in-memory file data (used by tests and benchmarks)
   - `build_index_from_dir()`: streaming -- reads files one at a time to avoid loading the entire corpus into memory
 
-- **Reader** (`reader.rs`): Memory-mapped index reader. Opens `ngrams.tbl` and `postings.dat` via `memmap2`, validates headers and CRC32, then provides:
+- **Reader** (`reader.rs`): Memory-mapped index reader. Opens `ngrams.tbl` and `postings.dat` via `memmap2`, validates headers and rapidhash-v3 checksums, then provides:
   - `lookup(hash)`: binary search over mmap'd n-gram table, returns posting list
   - `lookup_intersect(hashes)`: AND semantics (all n-grams must match)
   - `lookup_union(hashes)`: OR semantics (any n-gram matches)
@@ -98,17 +98,20 @@ Analyzes patterns and executes searches.
 
 Git integration via [gix](https://crates.io/crates/gix).
 
-- `open_repo()`: Open a Git repository
-- `head_commit()`: Get the current HEAD commit hash
-- `dirty_files()`: Detect modified, added, deleted, and untracked files in the working tree
+- `GitRepo::open()`: Open a Git repository
+- `GitRepo::head_commit()`: Get current HEAD commit hash
+- `GitRepo::detect_dirty_files()`: Detect modified, added, deleted, and untracked files in the working tree
+- `GitRepo::detect_changes_since(base_commit)`: Detect all changes since a commit (history + worktree)
 
-Returns `Vec<(PathBuf, FileStatus)>` where `FileStatus` is `Modified`, `Added`, `Deleted`, or `Untracked`.
+Returns `Vec<(PathBuf, FileStatus)>` where `FileStatus` is `Modified`, `Added`, or `Deleted`.
 
 ### qndx-cli
 
 CLI entrypoints using [clap](https://crates.io/crates/clap).
 
 Commands: `index`, `search`, `plan`, `bench report`, `bench check-budgets`.
+
+`index` performs incremental update checks by default when an index already exists: it compares changes since `Manifest.base_commit`, skips rebuild when up to date, and supports `--full` to force a full rebuild.
 
 The search command auto-detects the index (looks for `.qndx/index/v1/ngrams.tbl`) and falls back to scan-only if not present. With `--stats`, indexed search enables timing collection and prints a stage breakdown: index open, planning, candidate resolution, and verification.
 
@@ -256,7 +259,7 @@ The index reader uses `memmap2` for `ngrams.tbl` and `postings.dat`. This means:
 - OS-managed paging (only touched pages consume physical RAM)
 - Binary search directly over mmap'd bytes
 
-CRC32 validation is still performed at open time for corruption detection.
+rapidhash-v3 checksum validation is still performed at open time for corruption detection.
 
 ### No false negatives
 

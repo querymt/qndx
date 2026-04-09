@@ -341,7 +341,13 @@ pub fn index_search_with_overlay_and_timing(
     // Step 2: Get candidate sets from both baseline and overlay
     let candidate_start = collect_timing.then(Instant::now);
     let baseline_candidates = resolve_candidates_from_plan(reader, &plan);
-    let overlay_candidates = resolve_candidates_from_plan_overlay(overlay, &plan);
+    let mut overlay_candidates = resolve_candidates_from_plan_overlay(overlay, &plan);
+
+    // Guardrail: overlay files are usually a small set, so if n-gram planning yields
+    // no overlay candidates, fall back to scanning all overlay files to avoid misses.
+    if overlay_candidates.is_empty() && !overlay.is_empty() {
+        overlay_candidates = overlay.lookup_intersect(&[]);
+    }
 
     // Step 3: Merge candidates and filter out deleted files
     let mut all_candidate_ids = Vec::new();
