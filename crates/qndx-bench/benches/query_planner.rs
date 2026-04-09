@@ -5,6 +5,7 @@
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use qndx_bench::fixtures;
+use qndx_query::decompose::decompose_pattern;
 use qndx_query::planner::{plan_diagnostics, plan_query};
 use std::hint::black_box;
 
@@ -17,10 +18,24 @@ fn bench_query_planner(c: &mut Criterion) {
     let patterns = fixtures::benchmark_patterns();
 
     for (name, pattern) in &patterns {
+        group.bench_with_input(BenchmarkId::new("decompose", name), pattern, |b, p| {
+            b.iter(|| {
+                let decomposition = decompose_pattern(black_box(p));
+                black_box(decomposition);
+            });
+        });
+
         group.bench_with_input(BenchmarkId::new("plan", name), pattern, |b, p| {
             b.iter(|| {
                 let plan = plan_query(black_box(p));
                 black_box(plan);
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("diagnostics", name), pattern, |b, p| {
+            b.iter(|| {
+                let diag = plan_diagnostics(black_box(p));
+                black_box(diag);
             });
         });
     }
