@@ -9,7 +9,7 @@ description = "Shared bench fixtures and utilities for qndx"
 readme = "../../README.md"
 
 [dependencies]
-qndx-core = { workspace = true }
+qndx-core = { workspace = true, features = ["wincode"] }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
