@@ -34,6 +34,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Record Rust toolchain version
+        id: rustc-version
+        run: echo "version=$(rustc --version | sha256 -q)" >> "$GITHUB_OUTPUT"
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
@@ -48,10 +52,10 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: target/criterion
-          key: benchmark-baseline-${{ github.base_ref }}-${{ hashFiles('benchmarks/budgets.toml') }}
+          key: benchmark-baseline-${{ github.base_ref }}-rust-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('benchmarks/budgets.toml') }}
           restore-keys: |
-            benchmark-baseline-${{ github.base_ref }}-
-            benchmark-baseline-main-
+            benchmark-baseline-${{ github.base_ref }}-rust-${{ steps.rustc-version.outputs.version }}-
+            benchmark-baseline-main-rust-${{ steps.rustc-version.outputs.version }}-
 
       # ---------------------------------------------------------------
       # PR with baseline: compare against saved main baseline
@@ -116,7 +120,7 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: target/criterion
-          key: benchmark-baseline-${{ github.ref_name }}-${{ hashFiles('benchmarks/budgets.toml') }}
+          key: benchmark-baseline-${{ github.ref_name }}-rust-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('benchmarks/budgets.toml') }}
 
       - name: Comment PR with benchmark summary
         if: github.event_name == 'pull_request' && steps.restore-baseline.outputs.cache-hit == 'true'
