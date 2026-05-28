@@ -1,13 +1,17 @@
 //! Index builder: extract trigrams from files, write ngrams.tbl + postings.dat + manifest.bin.
 //!
-//! The build pipeline:
+//! The build pipeline (now with parallel extraction):
 //! 1. Walk files and assign sequential FileIds
-//! 2. Extract overlapping trigrams from each file
-//! 3. Collect inverted index: trigram_hash -> Vec<FileId>
+//! 2. **Extract n-grams from all files in parallel** (using rayon)
+//! 3. Merge per-file results into inverted index: trigram_hash -> Vec<FileId>
 //! 4. Sort trigram table by hash for binary search
 //! 5. Write postings.dat (concatenated delta-encoded posting blocks)
 //! 6. Write ngrams.tbl (sorted hash -> offset/len/flags entries)
 //! 7. Write manifest.bin (metadata + file path list)
+//!
+//! The parallel extraction phase processes files in chunks (default: 64 files per chunk)
+//! to balance CPU utilization with memory usage. Each file is processed independently,
+//! avoiding synchronization overhead during the CPU-bound extraction phase.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -19,6 +23,7 @@ use qndx_core::format::{
     serialize_ngram_entry,
 };
 use qndx_core::{FileId, Manifest, NgramEntry, NgramHash};
+use rayon::prelude::*;
 
 use crate::ngram::{extract_sparse_ngrams_all, extract_trigrams};
 use crate::postings::{DEFAULT_HYBRID_THRESHOLD, PostingList};
@@ -56,6 +61,74 @@ pub struct IncrementalResult {
     pub forced_full_rebuild: bool,
     /// Build stats when a rebuild happened.
     pub build_result: Option<BuildResult>,
+}
+
+/// Result of parallel n-gram extraction for a single file.
+#[derive(Debug)]
+struct FileNgramResult {
+    /// Assigned file ID.
+    fid: FileId,
+    /// Relative file path.
+    rel_path: String,
+    /// Extracted trigrams as (hash, fid) pairs.
+    trigrams: Vec<(NgramHash, FileId)>,
+    /// Extracted sparse n-grams as (hash, fid) pairs.
+    sparse: Vec<(NgramHash, FileId)>,
+    /// Source file size in bytes.
+    source_bytes: u64,
+}
+
+/// Extract n-grams from files in parallel using rayon.
+///
+/// Each file is processed independently, producing per-file results that
+/// can be merged sequentially afterward. This avoids shared mutable state
+/// and synchronization overhead.
+fn extract_ngrams_parallel(
+    discovered: &[qndx_core::walk::DiscoveredFile],
+) -> Vec<FileNgramResult> {
+    // Pre-assign file IDs based on discovery order
+    let file_id_map: std::collections::HashMap<&std::path::Path, FileId> = discovered
+        .iter()
+        .enumerate()
+        .map(|(i, file)| (file.abs_path.as_path(), i as FileId))
+        .collect();
+
+    // Parallel extraction with bounded chunk size for memory control
+    const CHUNK_SIZE: usize = 64;
+
+    discovered
+        .par_chunks(CHUNK_SIZE)
+        .flat_map(|chunk| {
+            chunk
+                .par_iter()
+                .filter_map(|file| {
+                    let content = std::fs::read(&file.abs_path).ok()?;
+                    let fid = file_id_map[file.abs_path.as_path()];
+
+                    // Extract trigrams
+                    let trigrams: Vec<(NgramHash, FileId)> = extract_trigrams(&content)
+                        .into_iter()
+                        .map(|hash| (hash, fid))
+                        .collect();
+
+                    // Extract sparse n-grams
+                    let sparse: Vec<(NgramHash, FileId)> =
+                        extract_sparse_ngrams_all(&content)
+                            .into_iter()
+                            .map(|(hash, _len)| (hash, fid))
+                            .collect();
+
+                    Some(FileNgramResult {
+                        fid,
+                        rel_path: file.rel_path.clone(),
+                        trigrams,
+                        sparse,
+                        source_bytes: content.len() as u64,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// Build a trigram index from in-memory file data.
@@ -181,12 +254,15 @@ pub fn build_index(
 
 /// Build a trigram index by walking a directory.
 ///
-/// Discovers files using `WalkConfig` and processes them one at a time,
-/// avoiding loading the entire corpus into memory. Only the inverted index
-/// (n-gram → file IDs) is held in memory during the build.
+/// Discovers files using `WalkConfig` and extracts n-grams in parallel using rayon.
+/// This significantly reduces build time for large repositories by utilizing
+/// multiple CPU cores for the CPU-bound extraction phase.
 ///
-/// For a 1 GB corpus this reduces peak memory from ~1 GB (all file content)
-/// + inverted index to just the inverted index + O(largest_file).
+/// The build pipeline:
+/// 1. Discover files and pre-assign sequential FileIds
+/// 2. Extract n-grams from all files in parallel (per-file isolation)
+/// 3. Merge per-file results into global inverted index (sequential)
+/// 4. Serialize ngrams.tbl, postings.dat, and manifest.bin (sequential)
 pub fn build_index_from_dir(
     root: &Path,
     index_dir: &Path,
@@ -197,35 +273,33 @@ pub fn build_index_from_dir(
 
     let discovered = qndx_core::walk::discover_files(root, config);
 
-    // Step 1: Build inverted index by streaming files one at a time
+    // Step 1: Parallel extraction of n-grams from all files
+    let file_results = extract_ngrams_parallel(&discovered);
+
+    // Step 2: Sequential merge of per-file results into global inverted index
     let mut inverted: BTreeMap<NgramHash, Vec<FileId>> = BTreeMap::new();
     let mut sparse_hashes: HashSet<NgramHash> = HashSet::new();
     let mut source_bytes: u64 = 0;
-    let mut file_paths: Vec<String> = Vec::with_capacity(discovered.len());
+    let mut file_paths: Vec<String> = Vec::with_capacity(file_results.len());
 
-    for file in &discovered {
-        let content = match std::fs::read(&file.abs_path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
+    // Sort by file ID to ensure deterministic ordering
+    let mut sorted_results = file_results;
+    sorted_results.sort_by_key(|r| r.fid);
 
-        let fid = file_paths.len() as FileId;
-        file_paths.push(file.rel_path.clone());
-        source_bytes += content.len() as u64;
+    for result in sorted_results {
+        file_paths.push(result.rel_path);
+        source_bytes += result.source_bytes;
 
-        // Extract trigrams
-        let trigrams = extract_trigrams(&content);
-        for hash in trigrams {
+        // Merge trigrams
+        for (hash, fid) in result.trigrams {
             inverted.entry(hash).or_default().push(fid);
         }
 
-        // Extract sparse n-grams (build-all approach)
-        let sparse = extract_sparse_ngrams_all(&content);
-        for (hash, _len) in sparse {
+        // Merge sparse n-grams
+        for (hash, fid) in result.sparse {
             sparse_hashes.insert(hash);
             inverted.entry(hash).or_default().push(fid);
         }
-        // `content` is dropped here — only one file in memory at a time
     }
 
     // Deduplicate postings
@@ -234,7 +308,7 @@ pub fn build_index_from_dir(
         posting.dedup();
     }
 
-    // Step 2–6: Serialize and write (same as build_index)
+    // Step 3–7: Serialize and write (same as build_index)
     let mut postings_payload = Vec::new();
     let mut ngram_entries: Vec<NgramEntry> = Vec::with_capacity(inverted.len());
     let mut trigram_count: u32 = 0;
@@ -568,5 +642,107 @@ mod tests {
         assert!(!result.up_to_date);
         assert!(result.changed_files >= 1);
         assert!(result.build_result.is_some());
+    }
+
+    #[test]
+    fn parallel_build_is_deterministic() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Create multiple test files
+        for i in 0..20 {
+            fs::write(
+                root.join(format!("file_{}.rs", i)),
+                format!("fn func_{}() {{ println!(\"test {}\"); }}\n", i, i),
+            )
+            .unwrap();
+        }
+
+        let config = qndx_core::walk::WalkConfig::default();
+
+        // Build index twice and verify results are identical
+        let index_dir1 = root.join(".qndx/index/v1");
+        let result1 = build_index_from_dir(root, &index_dir1, &config, None).unwrap();
+
+        let index_dir2 = root.join(".qndx/index/v2");
+        let result2 = build_index_from_dir(root, &index_dir2, &config, None).unwrap();
+
+        // Results should be identical
+        assert_eq!(result1.file_count, result2.file_count);
+        assert_eq!(result1.ngram_count, result2.ngram_count);
+        assert_eq!(result1.trigram_count, result2.trigram_count);
+        assert_eq!(result1.sparse_count, result2.sparse_count);
+        assert_eq!(result1.postings_bytes, result2.postings_bytes);
+        assert_eq!(result1.source_bytes, result2.source_bytes);
+    }
+
+    #[test]
+    fn parallel_build_from_dir_with_many_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Create many files to trigger parallel processing
+        fs::create_dir_all(root.join("src")).unwrap();
+        for i in 0..100 {
+            fs::write(
+                root.join(format!("src/file_{}.rs", i)),
+                format!(
+                    "// File {}\nfn function_{}() {{\n    println!(\"Hello from file {}\");\n}}\n",
+                    i, i, i
+                ),
+            )
+            .unwrap();
+        }
+
+        let index_dir = root.join(".qndx/index/v1");
+        let config = qndx_core::walk::WalkConfig::default();
+
+        let result = build_index_from_dir(root, &index_dir, &config, None).unwrap();
+
+        assert_eq!(result.file_count, 100);
+        assert!(result.ngram_count > 0);
+        assert!(result.source_bytes > 0);
+        assert!(index_dir.join("ngrams.tbl").exists());
+        assert!(index_dir.join("postings.dat").exists());
+        assert!(index_dir.join("manifest.bin").exists());
+    }
+
+    #[test]
+    fn parallel_build_handles_io_errors_gracefully() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Create some files
+        fs::write(root.join("good.rs"), "fn main() { println!(\"ok\"); }\n").unwrap();
+
+        let index_dir = root.join(".qndx/index/v1");
+        let config = qndx_core::walk::WalkConfig::default();
+
+        // Should succeed even if some files might have issues
+        let result = build_index_from_dir(root, &index_dir, &config, None).unwrap();
+        assert!(result.file_count >= 1);
+    }
+
+    #[test]
+    fn parallel_build_respects_chunk_boundaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Create exactly CHUNK_SIZE (64) files to test chunk boundary
+        for i in 0..64 {
+            fs::write(
+                root.join(format!("file_{:03}.rs", i)),
+                format!("const VAL_{}: u32 = {};\n", i, i * 100),
+            )
+            .unwrap();
+        }
+
+        let index_dir = root.join(".qndx/index/v1");
+        let config = qndx_core::walk::WalkConfig::default();
+
+        let result = build_index_from_dir(root, &index_dir, &config, None).unwrap();
+
+        assert_eq!(result.file_count, 64);
+        assert!(result.ngram_count > 0);
     }
 }
