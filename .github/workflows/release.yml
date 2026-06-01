@@ -126,6 +126,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          key: ${{ matrix.target }}
+          cache-targets: false
 
       - name: Install cross
         if: matrix.use_cross
