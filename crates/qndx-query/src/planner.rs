@@ -577,10 +577,10 @@ mod tests {
         // With trigrams being very common and sparse being very rare, the
         // cost model should prefer sparse whenever sparse grams are available.
         let diag = plan_diagnostics("MAX_FILE_SIZE");
-        if let (Some(sparse_cost), _) = (diag.sparse_cost, diag.sparse_lookups) {
-            if sparse_cost < diag.trigram_cost {
-                assert_eq!(plan.strategy, PlanStrategy::Sparse);
-            }
+        if let (Some(sparse_cost), _) = (diag.sparse_cost, diag.sparse_lookups)
+            && sparse_cost < diag.trigram_cost
+        {
+            assert_eq!(plan.strategy, PlanStrategy::Sparse);
         }
     }
 

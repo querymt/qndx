@@ -1834,7 +1834,7 @@ dependencies = [
 
 [[package]]
 name = "qndx-bench"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ahash",
  "crc32fast",
@@ -1857,7 +1857,7 @@ dependencies = [
 
 [[package]]
 name = "qndx-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "qndx-core",
@@ -1871,7 +1871,7 @@ dependencies = [
 
 [[package]]
 name = "qndx-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ignore",
  "rapidhash",
@@ -1883,7 +1883,7 @@ dependencies = [
 
 [[package]]
 name = "qndx-git"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "gix",
  "qndx-core",
@@ -1893,7 +1893,7 @@ dependencies = [
 
 [[package]]
 name = "qndx-index"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "memmap2",
  "postcard",
@@ -1908,7 +1908,7 @@ dependencies = [
 
 [[package]]
 name = "qndx-query"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "proptest",
  "qndx-core",

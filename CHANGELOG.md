@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-01
+
+### Fixed
+- Parallel index build behavior fixes and improvements.
+
+### Changed
+- Dependency updates across workspace crates (including `roaring`, `serde_json`, `wincode`, `clap`, and `rand`).
+- CI/release tooling updates (including `softprops/action-gh-release` and `actions/github-script`).
+- Rust toolchain pinning and cache integration improvements for CI.
+
 ## [0.2.0] - 2026-04-09
 
 ### Added
