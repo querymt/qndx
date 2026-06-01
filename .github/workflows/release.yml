@@ -109,7 +109,18 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain-file: rust-toolchain.toml
           targets: ${{ matrix.target }}
+
+      - name: Ensure Rust target installed
+        shell: bash
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Show Rust toolchain and installed targets
+        shell: bash
+        run: |
+          rustc -vV
+          rustup target list --installed
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
