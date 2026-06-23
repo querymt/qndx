@@ -49,7 +49,7 @@ jobs:
       - name: Restore baseline from main branch
         if: github.event_name == 'pull_request'
         id: restore-baseline
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: target/criterion
           key: benchmark-baseline-${{ github.base_ref }}-rust-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('benchmarks/budgets.toml') }}
@@ -117,7 +117,7 @@ jobs:
 
       - name: Save baseline cache (main branch)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: target/criterion
           key: benchmark-baseline-${{ github.ref_name }}-rust-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('benchmarks/budgets.toml') }}
@@ -194,7 +194,7 @@ jobs:
 
       - name: Cache corpus (${{ matrix.corpus }})
         id: cache-corpus
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: benchmarks/corpora/${{ matrix.corpus }}
           key: corpus-${{ matrix.corpus }}-v1
